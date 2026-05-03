@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.DS_Store
+__pycache__/
+*.pyc
+
+# Terraform local state and generated packages
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+infra/terraform/lambda.zip
