@@ -24,12 +24,12 @@ Server flow:
 Server flow:
 
 1. Store the image in S3 under an intake prefix.
-2. Detect every face in the photo.
-3. Crop each face or use a compatible image workflow for per-face search.
-4. Call Rekognition `SearchFacesByImage` for each face.
+2. Load the known people from DynamoDB, capped by `MAX_COMPARE_PEOPLE`.
+3. Compare the uploaded photo against each person's stored reference keys, capped by `MAX_REFS_PER_PERSON`.
+4. Call Rekognition `CompareFaces` for each bounded reference comparison.
 5. Save matches above the production threshold as `matched`.
 6. Save low-confidence matches as `review`.
-7. Return the photo asset with preview URL and match results.
+7. Return the photo asset with a short-lived preview URL and match results.
 
 ## Endpoints
 
