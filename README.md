@@ -4,7 +4,7 @@ FaceID is a serverless photo-sorting web app that groups uploaded photos by reco
 
 **Live demo:** [https://faceid-8dc.pages.dev](https://faceid-8dc.pages.dev)
 
-The hosted demo currently runs in local-preview/mock mode unless `VITE_API_BASE_URL` is configured with a deployed AWS API.
+The hosted demo is connected to the Terraform-managed AWS backend. The app still supports local mock mode when `VITE_API_BASE_URL` is unset.
 
 ## About
 
@@ -19,7 +19,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - **Storage:** Private S3 bucket with presigned PUT and GET URLs
 - **Face matching:** Amazon Rekognition `IndexFaces` for references and bounded `CompareFaces` checks for uploaded photos
 - **Database:** DynamoDB tables for people, photos, and matches
-- **Infrastructure:** Terraform with cost guardrails for throttling, batch size, and Lambda concurrency
+- **Infrastructure:** Terraform with cost guardrails for throttling, batch size, and upload limits
 
 ## Engineering Highlights
 
@@ -27,7 +27,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - Dual runtime mode: mock data for local/frontend review, real AWS API mode when `VITE_API_BASE_URL` is set.
 - Reference-photo naming flow that derives people from filenames such as `jane-smith.jpg`.
 - Private photo storage with short-lived signed preview URLs rather than public S3 objects.
-- Explicit low-volume cost controls: max files per batch, upload size limits, bounded people/reference comparisons, API throttling, Lambda reserved concurrency, and short CloudWatch log retention.
+- Explicit low-volume cost controls: max files per batch, upload size limits, bounded people/reference comparisons, API throttling, and short CloudWatch log retention.
 - Terraform-managed backend resources with `terraform destroy` support for cleanup.
 - Clear match states for user review: `matched`, `review`, and `unknown` in the shared API types.
 
@@ -100,8 +100,8 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 
 - Uploaded photos are stored in a private S3 bucket.
 - The frontend receives short-lived signed URLs for uploads and previews.
-- The current prototype does not include authentication or per-user isolation.
-- The public Cloudflare demo is intended for UI review unless connected to a deployed AWS backend.
+- The current public prototype does not include authentication or per-user isolation.
+- The public Cloudflare demo is connected to AWS with conservative API throttles and upload limits.
 - `force_destroy_bucket` defaults to `true` in Terraform so teardown removes uploaded assets.
 
 ## Limitations

@@ -83,11 +83,9 @@ resource "aws_rekognition_collection" "faces" {
 }
 
 resource "aws_dynamodb_table" "people" {
-  name           = "${local.name_prefix}-people"
-  billing_mode   = "PROVISIONED"
-  read_capacity  = 1
-  write_capacity = 1
-  hash_key       = "id"
+  name         = "${local.name_prefix}-people"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
 
   attribute {
     name = "id"
@@ -98,11 +96,9 @@ resource "aws_dynamodb_table" "people" {
 }
 
 resource "aws_dynamodb_table" "photos" {
-  name           = "${local.name_prefix}-photos"
-  billing_mode   = "PROVISIONED"
-  read_capacity  = 1
-  write_capacity = 1
-  hash_key       = "id"
+  name         = "${local.name_prefix}-photos"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
 
   attribute {
     name = "id"
@@ -113,12 +109,10 @@ resource "aws_dynamodb_table" "photos" {
 }
 
 resource "aws_dynamodb_table" "matches" {
-  name           = "${local.name_prefix}-matches"
-  billing_mode   = "PROVISIONED"
-  read_capacity  = 1
-  write_capacity = 1
-  hash_key       = "photo_id"
-  range_key      = "person_id"
+  name         = "${local.name_prefix}-matches"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "photo_id"
+  range_key    = "person_id"
 
   attribute {
     name = "photo_id"
@@ -135,8 +129,6 @@ resource "aws_dynamodb_table" "matches" {
     hash_key        = "person_id"
     range_key       = "photo_id"
     projection_type = "ALL"
-    read_capacity   = 1
-    write_capacity  = 1
   }
 
   tags = local.common_tags
@@ -229,16 +221,15 @@ resource "aws_cloudwatch_log_group" "lambda" {
 }
 
 resource "aws_lambda_function" "api" {
-  function_name                  = "${local.name_prefix}-api-${random_id.suffix.hex}"
-  role                           = aws_iam_role.lambda.arn
-  handler                        = "app.handler"
-  runtime                        = "python3.12"
-  architectures                  = ["arm64"]
-  filename                       = data.archive_file.lambda.output_path
-  source_code_hash               = data.archive_file.lambda.output_base64sha256
-  timeout                        = 60
-  memory_size                    = 512
-  reserved_concurrent_executions = var.lambda_reserved_concurrency
+  function_name    = "${local.name_prefix}-api-${random_id.suffix.hex}"
+  role             = aws_iam_role.lambda.arn
+  handler          = "app.handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  timeout          = 60
+  memory_size      = 512
 
   environment {
     variables = {

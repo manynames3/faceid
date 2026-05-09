@@ -5,19 +5,19 @@ This creates the low-volume AWS backend for the Cloudflare Pages frontend:
 - Private S3 bucket for reference and uploaded photos
 - API Gateway HTTP API
 - Python Lambda API
-- DynamoDB tables for people, photos, and matches
+- On-demand DynamoDB tables for people, photos, and matches
 - Rekognition face collection
 - CloudWatch log retention
 
 ## Cost Notes
 
-The idle stack should be near zero cost. At low volume, most usage can fit into AWS free-tier allowances on eligible accounts. The main variable cost is Rekognition:
+The idle stack should be near zero cost. At low volume, most usage can fit into AWS free-tier allowances on eligible accounts. DynamoDB uses on-demand billing so it is not configured with always-on read/write capacity. The main variable cost is Rekognition:
 
 ```text
 photo processing calls ~= uploaded photos * min(people, max_compare_people) * max_refs_per_person
 ```
 
-Keep `max_compare_people`, `max_refs_per_person`, and `max_files_per_batch` conservative until you test real volume. The default Lambda reserved concurrency and API throttles are intentionally low for cost control.
+Keep `max_compare_people`, `max_refs_per_person`, and `max_files_per_batch` conservative until you test real volume. The default API throttles are intentionally low for cost control.
 
 ## Deploy
 

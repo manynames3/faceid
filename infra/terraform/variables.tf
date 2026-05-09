@@ -13,7 +13,7 @@ variable "aws_region" {
 variable "allowed_origins" {
   description = "Browser origins allowed to call the API and upload to S3. Add your Cloudflare Pages URL here."
   type        = list(string)
-  default     = ["http://localhost:5173"]
+  default     = ["http://localhost:5173", "https://faceid-8dc.pages.dev"]
 }
 
 variable "matched_threshold" {
@@ -62,12 +62,6 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for Lambda logs."
   type        = number
   default     = 7
-}
-
-variable "lambda_reserved_concurrency" {
-  description = "Maximum concurrent Lambda executions. Keeps prototype costs bounded."
-  type        = number
-  default     = 2
 }
 
 variable "api_throttle_burst_limit" {

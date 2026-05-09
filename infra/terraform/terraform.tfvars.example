@@ -1,12 +1,10 @@
 project_name = "face-sorter"
 aws_region   = "us-east-1"
 
-# Add your deployed Cloudflare Pages URL before production use, for example:
-# allowed_origins = [
-#   "http://localhost:5173",
-#   "https://face-sorter.pages.dev"
-# ]
-allowed_origins = ["http://localhost:5173"]
+allowed_origins = [
+  "http://localhost:5173",
+  "https://faceid-8dc.pages.dev"
+]
 
 # Main cost guardrails for low-volume use.
 max_compare_people  = 50
@@ -14,6 +12,5 @@ max_refs_per_person = 2
 max_files_per_batch = 10
 max_upload_mb       = 15
 
-lambda_reserved_concurrency = 2
-api_throttle_burst_limit    = 5
-api_throttle_rate_limit     = 2
+api_throttle_burst_limit = 5
+api_throttle_rate_limit  = 2
