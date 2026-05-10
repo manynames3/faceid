@@ -13,7 +13,26 @@ output "rekognition_collection_id" {
   value       = aws_rekognition_collection.faces.collection_id
 }
 
+output "cognito_user_pool_id" {
+  description = "Cognito user pool used by the frontend and API Gateway authorizer."
+  value       = aws_cognito_user_pool.users.id
+}
+
+output "cognito_web_client_id" {
+  description = "Set this as VITE_AUTH_CLIENT_ID in Cloudflare Pages."
+  value       = aws_cognito_user_pool_client.web.id
+}
+
+output "cognito_hosted_ui_domain" {
+  description = "Set this as VITE_AUTH_DOMAIN in Cloudflare Pages."
+  value       = "https://${aws_cognito_user_pool_domain.hosted_ui.domain}.auth.${var.aws_region}.amazoncognito.com"
+}
+
 output "cloudflare_pages_env" {
-  description = "Cloudflare Pages environment variable to set after terraform apply."
-  value       = "VITE_API_BASE_URL=${aws_apigatewayv2_stage.default.invoke_url}"
+  description = "Cloudflare Pages environment variables to set after terraform apply."
+  value = join("\n", [
+    "VITE_API_BASE_URL=${aws_apigatewayv2_stage.default.invoke_url}",
+    "VITE_AUTH_CLIENT_ID=${aws_cognito_user_pool_client.web.id}",
+    "VITE_AUTH_DOMAIN=https://${aws_cognito_user_pool_domain.hosted_ui.domain}.auth.${var.aws_region}.amazoncognito.com",
+  ])
 }

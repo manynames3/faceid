@@ -10,7 +10,7 @@ The backend needs photo storage, face recognition, metadata persistence, and HTT
 
 ## Decision
 
-Use API Gateway HTTP API, Python Lambda, private S3, DynamoDB, Rekognition, and CloudWatch Logs.
+Use API Gateway HTTP API, Cognito JWT authorization, Python Lambda, private S3, DynamoDB, Rekognition, and CloudWatch Logs.
 
 ## Consequences
 

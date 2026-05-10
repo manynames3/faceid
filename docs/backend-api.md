@@ -1,6 +1,14 @@
 # Backend API Contract
 
-This frontend can run without a backend, but the production path should use an AWS serverless API behind `VITE_API_BASE_URL`.
+This frontend can run without a backend, but the production path uses a Cognito-authenticated AWS serverless API behind `VITE_API_BASE_URL`.
+
+All AWS API routes require:
+
+```text
+Authorization: Bearer <cognito-id-token>
+```
+
+API Gateway validates the token with a Cognito JWT authorizer. Lambda scopes S3 keys and DynamoDB records to the authenticated user's Cognito `sub` claim. Upload processing also requires a short-lived upload session issued by `/uploads/presign`.
 
 ## Reference Uploads
 
@@ -13,23 +21,27 @@ noah_kim_01.png -> Noah Kim
 
 Server flow:
 
-1. Store the image in S3 under a reference prefix.
-2. Parse the filename into a display name.
-3. Create or find the person in DynamoDB.
-4. Call Rekognition `IndexFaces` with the person identifier as metadata.
-5. Save the Rekognition face ID, person ID, S3 key, and source filename.
+1. Issue an upload session and presigned S3 PUT URL.
+2. Store the image in S3 under the authenticated user's reference prefix.
+3. Verify the upload session, S3 object size, content type, and signed metadata.
+4. Parse the filename into a display name.
+5. Create or find the person in DynamoDB.
+6. Call Rekognition `IndexFaces` with the person identifier as metadata.
+7. Save the Rekognition face ID, person ID, S3 key, and source filename.
 
 ## Photo Uploads
 
 Server flow:
 
-1. Store the image in S3 under an intake prefix.
-2. Load the known people from DynamoDB, capped by `MAX_COMPARE_PEOPLE`.
-3. Compare the uploaded photo against each person's stored reference keys, capped by `MAX_REFS_PER_PERSON`.
-4. Call Rekognition `CompareFaces` for each bounded reference comparison.
-5. Save matches above the production threshold as `matched`.
-6. Save low-confidence matches as `review`.
-7. Return the photo asset with a short-lived preview URL and match results.
+1. Issue an upload session and presigned S3 PUT URL.
+2. Store the image in S3 under the authenticated user's photo prefix.
+3. Verify the upload session, S3 object size, content type, and signed metadata.
+4. Load the known people from DynamoDB, capped by `MAX_COMPARE_PEOPLE`.
+5. Compare the uploaded photo against each person's stored reference keys, capped by `MAX_REFS_PER_PERSON`.
+6. Call Rekognition `CompareFaces` for each bounded reference comparison.
+7. Save matches above the production threshold as `matched`.
+8. Save low-confidence matches as `review`.
+9. Return the photo asset with a short-lived preview URL and match results.
 
 ## Endpoints
 
@@ -61,9 +73,13 @@ Response:
   "uploads": [
     {
       "name": "jane-smith.jpg",
-      "key": "references/2026/05/03/uuid-jane-smith.jpg",
+      "uploadId": "upload-uuid",
+      "key": "users/<owner>/references/2026/05/03/uuid-jane-smith.jpg",
       "url": "https://s3-presigned-put-url",
-      "headers": { "Content-Type": "image/jpeg" }
+      "headers": {
+        "Content-Type": "image/jpeg",
+        "x-amz-meta-upload-id": "upload-uuid"
+      }
     }
   ]
 }
@@ -79,7 +95,8 @@ Request:
   "files": [
     {
       "name": "event-001.jpg",
-      "key": "photos/2026/05/03/uuid-event-001.jpg",
+      "uploadId": "upload-uuid",
+      "key": "users/<owner>/photos/2026/05/03/uuid-event-001.jpg",
       "size": 2200000,
       "type": "image/jpeg"
     }
@@ -122,7 +139,7 @@ type PhotoMatch = {
 
 ### GET /library
 
-Returns the same `UploadResult` shape with all known people and recent photos.
+Returns the same `UploadResult` shape with the authenticated user's known people and recent photos.
 
 ## Thresholds
 

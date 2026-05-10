@@ -10,10 +10,11 @@ Image uploads can exceed comfortable API payload limits, and the backend should 
 
 ## Decision
 
-Have the frontend request presigned S3 PUT URLs, upload images directly to the private S3 bucket, then call the API with uploaded object keys for processing.
+Have the frontend request presigned S3 PUT URLs, upload images directly to the private S3 bucket, then call the API with uploaded object keys and issued upload session IDs for processing.
 
 ## Consequences
 
 - Lambda handles metadata and orchestration instead of large file bodies.
 - S3 remains private while still allowing browser uploads.
 - CORS must be configured for both API Gateway and S3.
+- Processing must verify upload sessions and S3 object metadata before using object keys.

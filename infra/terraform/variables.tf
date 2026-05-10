@@ -16,6 +16,18 @@ variable "allowed_origins" {
   default     = ["http://localhost:5173", "https://faceid-8dc.pages.dev"]
 }
 
+variable "auth_callback_urls" {
+  description = "Allowed Cognito Hosted UI callback URLs for the frontend."
+  type        = list(string)
+  default     = ["http://localhost:5173", "https://faceid-8dc.pages.dev"]
+}
+
+variable "auth_logout_urls" {
+  description = "Allowed Cognito Hosted UI logout redirect URLs for the frontend."
+  type        = list(string)
+  default     = ["http://localhost:5173", "https://faceid-8dc.pages.dev"]
+}
+
 variable "matched_threshold" {
   description = "Rekognition similarity percentage treated as an automatic match."
   type        = number
@@ -52,6 +64,12 @@ variable "max_upload_mb" {
   default     = 15
 }
 
+variable "upload_session_ttl_seconds" {
+  description = "Seconds before issued upload sessions expire and become eligible for DynamoDB TTL cleanup."
+  type        = number
+  default     = 3600
+}
+
 variable "url_expires_seconds" {
   description = "Expiration time for private S3 preview URLs returned to the frontend."
   type        = number
@@ -62,6 +80,30 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for Lambda logs."
   type        = number
   default     = 7
+}
+
+variable "enable_cloudwatch_alarms" {
+  description = "Create lightweight CloudWatch alarms for Lambda and API failures."
+  type        = bool
+  default     = true
+}
+
+variable "alarm_email" {
+  description = "Optional email address for CloudWatch alarm notifications. Leave blank to create alarms without notifications."
+  type        = string
+  default     = ""
+}
+
+variable "budget_alert_email" {
+  description = "Optional email address for AWS Budget alerts. Leave blank to skip budget creation."
+  type        = string
+  default     = ""
+}
+
+variable "monthly_budget_limit_usd" {
+  description = "Monthly account-level AWS Budget amount when budget_alert_email is set."
+  type        = number
+  default     = 10
 }
 
 variable "api_throttle_burst_limit" {

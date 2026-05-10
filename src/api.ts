@@ -1,3 +1,4 @@
+import type { AuthSession } from "./auth";
 import type { Person, PhotoAsset, PhotoMatch, UploadMode, UploadResult } from "./types";
 
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
@@ -7,6 +8,7 @@ type UploadPayload = {
   mode: UploadMode;
   files: File[];
   people: Person[];
+  session?: AuthSession | null;
 };
 
 export const hasConfiguredApi = Boolean(apiBaseUrl);
@@ -14,6 +16,7 @@ export const hasConfiguredApi = Boolean(apiBaseUrl);
 type PresignResponse = {
   uploads: Array<{
     name: string;
+    uploadId: string;
     key: string;
     url: string;
     headers: Record<string, string>;
@@ -22,17 +25,20 @@ type PresignResponse = {
 
 type UploadedFile = {
   name: string;
+  uploadId: string;
   key: string;
   size: number;
   type: string;
 };
 
-export async function fetchLibrary(): Promise<UploadResult> {
+export async function fetchLibrary(session?: AuthSession | null): Promise<UploadResult> {
   if (!apiBaseUrl) {
     return { people: [], photos: [] };
   }
 
-  const response = await fetch(`${apiBaseUrl}/library`);
+  const response = await fetch(`${apiBaseUrl}/library`, {
+    headers: authHeaders(session),
+  });
   if (!response.ok) {
     throw new Error(`Library load failed with status ${response.status}`);
   }
@@ -44,6 +50,7 @@ export async function submitUpload({
   mode,
   files,
   people,
+  session,
 }: UploadPayload): Promise<UploadResult> {
   if (!apiBaseUrl) {
     return simulateUpload(mode, files, people);
@@ -51,7 +58,7 @@ export async function submitUpload({
 
   const presignResponse = await fetch(`${apiBaseUrl}/uploads/presign`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders(session) },
     body: JSON.stringify({
       mode,
       files: files.map((file) => ({
@@ -87,6 +94,7 @@ export async function submitUpload({
 
     uploadedFiles.push({
       name: file.name,
+      uploadId: upload.uploadId,
       key: upload.key,
       size: file.size,
       type: file.type || "application/octet-stream",
@@ -95,7 +103,7 @@ export async function submitUpload({
 
   const response = await fetch(`${apiBaseUrl}/uploads/process`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders(session) },
     body: JSON.stringify({ mode, files: uploadedFiles }),
   });
 
@@ -104,6 +112,10 @@ export async function submitUpload({
   }
 
   return response.json() as Promise<UploadResult>;
+}
+
+function authHeaders(session?: AuthSession | null): Record<string, string> {
+  return session ? { Authorization: `Bearer ${session.idToken}` } : {};
 }
 
 async function simulateUpload(

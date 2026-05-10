@@ -39,6 +39,70 @@ button {
   cursor: pointer;
 }
 
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgb(21 127 114 / 8%), transparent 46%),
+    var(--surface-2);
+  padding: 20px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 14px;
+  width: min(430px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.auth-panel h1,
+.auth-panel p {
+  margin: 0;
+}
+
+.auth-panel h1 {
+  color: var(--ink);
+  font-size: 2.2rem;
+  line-height: 1;
+}
+
+.auth-panel p:not(.eyebrow) {
+  color: var(--muted);
+}
+
+.primary-action,
+.account-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  border-radius: 8px;
+  font-weight: 800;
+}
+
+.primary-action {
+  width: 100%;
+  border: 0;
+  background: var(--accent);
+  color: #ffffff;
+  padding: 0 14px;
+}
+
+.primary-action:disabled {
+  cursor: wait;
+  opacity: 0.8;
+}
+
+.auth-notice {
+  width: 100%;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
@@ -205,6 +269,14 @@ button {
   gap: 18px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: min(500px, 100%);
+}
+
 .eyebrow {
   margin: 0 0 6px;
   font-size: 0.78rem;
@@ -234,6 +306,19 @@ button {
   outline: 0;
   background: transparent;
   color: var(--ink);
+}
+
+.account-button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0 12px;
+}
+
+.account-button:hover {
+  border-color: rgb(21 127 114 / 28%);
+  color: var(--accent);
 }
 
 .upload-strip {
@@ -494,6 +579,17 @@ button {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .search-box,
+  .account-button {
+    width: 100%;
   }
 
   .topbar h2 {

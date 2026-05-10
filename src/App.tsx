@@ -6,6 +6,8 @@ import {
   ImagePlus,
   Images,
   Loader2,
+  LogIn,
+  LogOut,
   Search,
   ShieldCheck,
   UploadCloud,
@@ -15,6 +17,14 @@ import {
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { fetchLibrary, hasConfiguredApi, submitUpload } from "./api";
+import {
+  completeSignInFromUrl,
+  getStoredSession,
+  hasConfiguredAuth,
+  signOut,
+  startSignIn,
+  type AuthSession,
+} from "./auth";
 import { initialPeople, initialPhotos } from "./mockData";
 import type { Person, PhotoAsset, UploadMode } from "./types";
 
@@ -28,9 +38,19 @@ function App() {
   );
   const [activePersonId, setActivePersonId] = useState(allPeopleId);
   const [query, setQuery] = useState("");
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() =>
+    getStoredSession(),
+  );
+  const [isAuthLoading, setIsAuthLoading] = useState(
+    hasConfiguredApi && hasConfiguredAuth,
+  );
   const [isUploading, setIsUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(
-    hasConfiguredApi ? "Loading AWS library." : null,
+    hasConfiguredApi
+      ? hasConfiguredAuth
+        ? "Checking sign-in."
+        : "Loading AWS library."
+      : null,
   );
 
   const reviewCount = photos.filter((photo) =>
@@ -38,13 +58,50 @@ function App() {
   ).length;
 
   useEffect(() => {
-    if (!hasConfiguredApi) {
+    if (!hasConfiguredAuth) {
       return;
     }
 
     let isCancelled = false;
 
-    fetchLibrary()
+    completeSignInFromUrl()
+      .then((session) => {
+        if (isCancelled) {
+          return;
+        }
+        setAuthSession(session);
+        if (!session) {
+          setNotice(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCancelled) {
+          return;
+        }
+        setNotice(error instanceof Error ? error.message : "Sign-in failed.");
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsAuthLoading(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasConfiguredApi) {
+      return;
+    }
+    if (hasConfiguredAuth && !authSession) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    fetchLibrary(authSession)
       .then((result) => {
         if (isCancelled) {
           return;
@@ -63,7 +120,7 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [authSession]);
 
   const selectedPerson = people.find((person) => person.id === activePersonId);
 
@@ -101,12 +158,21 @@ function App() {
       setNotice("No supported image files selected.");
       return;
     }
+    if (hasConfiguredApi && hasConfiguredAuth && !authSession) {
+      setNotice("Sign in before uploading photos.");
+      return;
+    }
 
     setIsUploading(true);
     setNotice(null);
 
     try {
-      const result = await submitUpload({ mode, files: acceptedFiles, people });
+      const result = await submitUpload({
+        mode,
+        files: acceptedFiles,
+        people,
+        session: authSession,
+      });
 
       if (result.people.length > 0) {
         setPeople((current) => mergePeople(current, result.people));
@@ -131,6 +197,50 @@ function App() {
     }
   }
 
+  function handleSignIn() {
+    void startSignIn().catch((error: unknown) => {
+      setNotice(error instanceof Error ? error.message : "Sign-in failed.");
+    });
+  }
+
+  if (hasConfiguredApi && hasConfiguredAuth && (isAuthLoading || !authSession)) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-label="Sign in">
+          <div className="brand-mark">
+            <UsersRound size={22} aria-hidden="true" />
+          </div>
+          <p className="eyebrow">Private photo library</p>
+          <h1>Face Sorter</h1>
+          <p>Sign in with Cognito to upload reference faces and view your photo matches.</p>
+          <button
+            className="primary-action"
+            disabled={isAuthLoading}
+            onClick={handleSignIn}
+            type="button"
+          >
+            {isAuthLoading ? (
+              <Loader2 className="spin" size={18} aria-hidden="true" />
+            ) : (
+              <LogIn size={18} aria-hidden="true" />
+            )}
+            <span>{isAuthLoading ? "Checking sign-in" : "Sign in"}</span>
+          </button>
+          {notice && (
+            <div className="notice auth-notice" role="status">
+              {isAuthLoading ? (
+                <Loader2 size={18} className="spin" />
+              ) : (
+                <ShieldCheck size={18} />
+              )}
+              <span>{notice}</span>
+            </div>
+          )}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="People and filters">
@@ -140,7 +250,9 @@ function App() {
           </div>
           <div>
             <h1>Face Sorter</h1>
-            <span>{hasConfiguredApi ? "API connected" : "Local preview"}</span>
+            <span>
+              {authSession?.email ?? (hasConfiguredApi ? "API connected" : "Local preview")}
+            </span>
           </div>
         </div>
 
@@ -201,15 +313,23 @@ function App() {
                   : "Photo Library"}
             </h2>
           </div>
-          <label className="search-box">
-            <Search size={18} aria-hidden="true" />
-            <input
-              aria-label="Search photos and people"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search"
-              value={query}
-            />
-          </label>
+          <div className="topbar-actions">
+            <label className="search-box">
+              <Search size={18} aria-hidden="true" />
+              <input
+                aria-label="Search photos and people"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search"
+                value={query}
+              />
+            </label>
+            {hasConfiguredAuth && authSession && (
+              <button className="account-button" onClick={signOut} type="button">
+                <LogOut size={17} aria-hidden="true" />
+                <span>Sign out</span>
+              </button>
+            )}
+          </div>
         </header>
 
         <section className="upload-strip" aria-label="Upload files">

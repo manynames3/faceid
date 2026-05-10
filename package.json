@@ -7,7 +7,10 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "npm run test:frontend && npm run test:backend",
+    "test:backend": "python3 -m unittest discover backend/tests",
+    "test:frontend": "vitest run"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.0",
@@ -24,6 +27,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "typescript-eslint": "^8.46.4",
+    "vitest": "^4.1.5",
     "wrangler": "^4.87.0"
   }
 }
