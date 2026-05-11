@@ -144,6 +144,36 @@ resource "aws_rekognition_collection" "faces" {
   tags          = local.common_tags
 }
 
+resource "aws_dynamodb_table" "events" {
+  name         = "${local.name_prefix}-events"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  attribute {
+    name = "owner_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "owner_id-created_at-index"
+    hash_key        = "owner_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  tags = local.common_tags
+}
+
 resource "aws_dynamodb_table" "people" {
   name         = "${local.name_prefix}-people"
   billing_mode = "PAY_PER_REQUEST"
@@ -323,10 +353,12 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:UpdateItem"
         ]
         Resource = [
+          aws_dynamodb_table.events.arn,
           aws_dynamodb_table.people.arn,
           aws_dynamodb_table.photos.arn,
           aws_dynamodb_table.matches.arn,
           aws_dynamodb_table.upload_sessions.arn,
+          "${aws_dynamodb_table.events.arn}/index/*",
           "${aws_dynamodb_table.people.arn}/index/*",
           "${aws_dynamodb_table.photos.arn}/index/*",
           "${aws_dynamodb_table.matches.arn}/index/*"
@@ -478,6 +510,8 @@ resource "aws_lambda_function" "api" {
       ALLOWED_ORIGINS            = join(",", var.allowed_origins)
       BUCKET_NAME                = aws_s3_bucket.assets.bucket
       COLLECTION_ID              = aws_rekognition_collection.faces.collection_id
+      EVENTS_OWNER_INDEX         = "owner_id-created_at-index"
+      EVENTS_TABLE               = aws_dynamodb_table.events.name
       MATCHED_THRESHOLD          = tostring(var.matched_threshold)
       MATCHES_OWNER_INDEX        = "owner_id-photo_id-index"
       MATCHES_TABLE              = aws_dynamodb_table.matches.name
@@ -510,7 +544,7 @@ resource "aws_apigatewayv2_api" "http" {
 
   cors_configuration {
     allow_headers = ["content-type", "authorization"]
-    allow_methods = ["DELETE", "GET", "POST", "OPTIONS"]
+    allow_methods = ["DELETE", "GET", "PATCH", "POST", "OPTIONS"]
     allow_origins = var.allowed_origins
     max_age       = 300
   }
@@ -545,6 +579,22 @@ resource "aws_apigatewayv2_route" "library" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+resource "aws_apigatewayv2_route" "events_list" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /events"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "events_create" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "POST /events"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 resource "aws_apigatewayv2_route" "presign" {
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = "POST /uploads/presign"
@@ -572,6 +622,14 @@ resource "aws_apigatewayv2_route" "delete_photo" {
 resource "aws_apigatewayv2_route" "delete_person" {
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = "DELETE /people/{person_id}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "match_review" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "PATCH /matches/{photo_id}/{person_id}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id

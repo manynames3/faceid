@@ -1,6 +1,6 @@
 # Responsible Use And Matching Quality
 
-FaceID Events is designed for private event photo delivery: an owner uploads named guest reference images and event photos, then reviews matches before using the per-person galleries. It is not designed for public surveillance, law-enforcement identification, or automated decisions that affect a person's rights, liberty, discipline, employment, access, or safety.
+FaceID Events is designed for private event photo delivery: an owner creates an event workspace, confirms guest consent for reference uploads, uploads named guest reference images and event photos, then reviews matches before using the per-person galleries. It is not designed for public surveillance, law-enforcement identification, or automated decisions that affect a person's rights, liberty, discipline, employment, access, or safety.
 
 ## Reference Image Guidance
 
@@ -17,7 +17,7 @@ The backend currently compares a bounded number of references per person through
 
 ## Review Queue Expectations
 
-The app separates high-confidence matches from lower-confidence `review` matches. The review queue is part of the product model, not an error state. Event owners should inspect review matches before delivering galleries, especially when:
+The app separates high-confidence `matched` suggestions from lower-confidence `needs_review` suggestions. Event owners can mark match candidates `approved` or `rejected`; the review queue is part of the product model, not an error state. Event owners should inspect review matches before delivering galleries, especially when:
 
 - Reference photos are old or low quality.
 - Event photos include side profiles or partial faces.

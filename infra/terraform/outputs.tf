@@ -8,6 +8,11 @@ output "asset_bucket_name" {
   value       = aws_s3_bucket.assets.bucket
 }
 
+output "events_table_name" {
+  description = "DynamoDB table holding event/workspace records."
+  value       = aws_dynamodb_table.events.name
+}
+
 output "rekognition_collection_id" {
   description = "Rekognition face collection used for indexed reference faces."
   value       = aws_rekognition_collection.faces.collection_id

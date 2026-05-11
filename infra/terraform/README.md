@@ -7,7 +7,7 @@ This creates the low-volume AWS backend for the Cloudflare Pages frontend:
 - API Gateway HTTP API
 - API Gateway JWT authorizer
 - Python Lambda API
-- On-demand DynamoDB tables for owner-scoped people, photos, matches, and upload sessions
+- On-demand DynamoDB tables for events, owner-scoped people, photos, matches, and upload sessions
 - Rekognition face collection
 - CloudWatch Lambda logs, API access logs, and failure alarms
 - Optional AWS Budget email alert

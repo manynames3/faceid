@@ -1,4 +1,16 @@
-import type { Person, PhotoAsset } from "./types";
+import type { EventWorkspace, Person, PhotoAsset } from "./types";
+
+export const initialEvents: EventWorkspace[] = [
+  {
+    id: "event-spring-gala",
+    name: "Spring Gala",
+    createdAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
+    status: "active",
+    guestCount: 3,
+    photoCount: 3,
+    reviewCount: 1,
+  },
+];
 
 export const initialPeople: Person[] = [
   {
@@ -7,6 +19,7 @@ export const initialPeople: Person[] = [
     initials: "AM",
     referenceCount: 3,
     photoCount: 8,
+    consentStatus: "captured",
   },
   {
     id: "person-noah-kim",
@@ -14,6 +27,7 @@ export const initialPeople: Person[] = [
     initials: "NK",
     referenceCount: 2,
     photoCount: 5,
+    consentStatus: "captured",
   },
   {
     id: "person-maya-johnson",
@@ -21,6 +35,7 @@ export const initialPeople: Person[] = [
     initials: "MJ",
     referenceCount: 4,
     photoCount: 11,
+    consentStatus: "captured",
   },
 ];
 
@@ -75,7 +90,7 @@ export const initialPhotos: PhotoAsset[] = [
         personId: "person-ava-morales",
         personName: "Ava Morales",
         confidence: 84.6,
-        status: "review",
+        status: "needs_review",
       },
     ],
   },

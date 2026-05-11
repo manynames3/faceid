@@ -1,10 +1,21 @@
 import type { AuthSession } from "./auth";
-import type { Person, PhotoAsset, PhotoMatch, UploadMode, UploadResult } from "./types";
+import type {
+  EventWorkspace,
+  LibraryResult,
+  MatchStatus,
+  Person,
+  PhotoAsset,
+  PhotoMatch,
+  UploadMode,
+  UploadResult,
+} from "./types";
 
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const apiBaseUrl = rawApiBaseUrl?.replace(/\/$/, "");
 
 type UploadPayload = {
+  consentConfirmed?: boolean;
+  eventId?: string;
   mode: UploadMode;
   files: File[];
   people: Person[];
@@ -31,19 +42,74 @@ type UploadedFile = {
   type: string;
 };
 
-export async function fetchLibrary(session?: AuthSession | null): Promise<UploadResult> {
+export async function fetchEvents(
+  session?: AuthSession | null,
+): Promise<EventWorkspace[]> {
+  if (!apiBaseUrl) {
+    return [];
+  }
+
+  const response = await fetch(`${apiBaseUrl}/events`, {
+    headers: authHeaders(session),
+  });
+  if (!response.ok) {
+    throw new Error(`Event load failed with status ${response.status}`);
+  }
+
+  const result = (await response.json()) as { events: EventWorkspace[] };
+  return result.events;
+}
+
+export async function createEvent(
+  name: string,
+  session?: AuthSession | null,
+): Promise<EventWorkspace> {
+  if (!apiBaseUrl) {
+    return {
+      id: `event-${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`,
+      name,
+      createdAt: new Date().toISOString(),
+      status: "active",
+      guestCount: 0,
+      photoCount: 0,
+      reviewCount: 0,
+    };
+  }
+
+  const response = await fetch(`${apiBaseUrl}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders(session) },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    throw new Error(`Event create failed with status ${response.status}`);
+  }
+
+  const result = (await response.json()) as { event: EventWorkspace };
+  return result.event;
+}
+
+export async function fetchLibrary(
+  eventId?: string,
+  session?: AuthSession | null,
+): Promise<LibraryResult> {
   if (!apiBaseUrl) {
     return { people: [], photos: [] };
   }
 
-  const response = await fetch(`${apiBaseUrl}/library`, {
+  const url = new URL(`${apiBaseUrl}/library`);
+  if (eventId) {
+    url.searchParams.set("eventId", eventId);
+  }
+
+  const response = await fetch(url.toString(), {
     headers: authHeaders(session),
   });
   if (!response.ok) {
     throw new Error(`Library load failed with status ${response.status}`);
   }
 
-  return response.json() as Promise<UploadResult>;
+  return response.json() as Promise<LibraryResult>;
 }
 
 export async function deletePhoto(photoId: string, session?: AuthSession | null) {
@@ -76,7 +142,41 @@ export async function deletePerson(personId: string, session?: AuthSession | nul
   }
 }
 
+export async function updateMatchStatus({
+  photoId,
+  personId,
+  session,
+  status,
+}: {
+  photoId: string;
+  personId: string;
+  session?: AuthSession | null;
+  status: Extract<MatchStatus, "approved" | "rejected">;
+}): Promise<PhotoMatch | null> {
+  if (!apiBaseUrl) {
+    return null;
+  }
+
+  const response = await fetch(
+    `${apiBaseUrl}/matches/${encodeURIComponent(photoId)}/${encodeURIComponent(personId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders(session) },
+      body: JSON.stringify({ status }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Review update failed with status ${response.status}`);
+  }
+
+  const result = (await response.json()) as { match: PhotoMatch };
+  return result.match;
+}
+
 export async function submitUpload({
+  consentConfirmed,
+  eventId,
   mode,
   files,
   people,
@@ -90,6 +190,7 @@ export async function submitUpload({
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders(session) },
     body: JSON.stringify({
+      eventId,
       mode,
       files: files.map((file) => ({
         name: file.name,
@@ -134,7 +235,15 @@ export async function submitUpload({
   const response = await fetch(`${apiBaseUrl}/uploads/process`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders(session) },
-    body: JSON.stringify({ mode, files: uploadedFiles }),
+    body: JSON.stringify({
+      consent:
+        mode === "references"
+          ? { confirmed: consentConfirmed === true, source: "owner_attested" }
+          : undefined,
+      eventId,
+      mode,
+      files: uploadedFiles,
+    }),
   });
 
   if (!response.ok) {
@@ -162,9 +271,10 @@ async function simulateUpload(
         id: `person-${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`,
         name,
         initials: initialsFromName(name),
+        consentStatus: "captured",
         referenceCount: 1,
         photoCount: 0,
-      };
+      } satisfies Person;
     });
 
     return { people: nextPeople, photos: [] };
@@ -190,7 +300,7 @@ async function simulateUpload(
         personId: primary.id,
         personName: primary.name,
         confidence,
-        status: confidence >= 86 ? "matched" : "review",
+        status: confidence >= 86 ? "matched" : "needs_review",
       },
     ];
 

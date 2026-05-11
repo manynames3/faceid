@@ -1,6 +1,6 @@
 # FaceID
 
-FaceID is a serverless private event-gallery app for photographers and event teams that groups uploaded event photos by recognizable guests. The React frontend supports guest reference intake, event photo uploads, confidence review, per-person galleries, and owner-controlled deletion. The production architecture is designed around Cloudflare Pages for the static app and a Cognito-authenticated AWS serverless backend for private storage, Rekognition-based face comparison, and DynamoDB metadata.
+FaceID is a serverless private event-gallery app for photographers and event teams that groups uploaded event photos by recognizable guests inside event-scoped workspaces. The React frontend supports event creation, consent-attested guest reference intake, event photo uploads, human review decisions, per-person galleries, and owner-controlled deletion. The production architecture is designed around Cloudflare Pages for the static app and a Cognito-authenticated AWS serverless backend for private storage, Rekognition-based face comparison, and DynamoDB metadata.
 
 **Live demo:** [https://faceid-8dc.pages.dev](https://faceid-8dc.pages.dev)
 
@@ -18,7 +18,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - **Backend:** AWS API Gateway HTTP API, Cognito Hosted UI/JWT authorizer, Python 3.12 Lambda
 - **Storage:** Private S3 bucket with presigned PUT and GET URLs
 - **Face matching:** Amazon Rekognition `IndexFaces` for references and bounded `CompareFaces` checks for uploaded photos
-- **Database:** DynamoDB tables for people, photos, matches, and short-lived upload sessions
+- **Database:** DynamoDB tables for events, people, photos, matches, and short-lived upload sessions
 - **Infrastructure:** Terraform with cost guardrails for throttling, batch size, and upload limits
 - **Quality:** Vitest, Python `unittest`, GitHub Actions CI, Terraform validation
 
@@ -27,6 +27,9 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - Direct browser-to-S3 uploads through presigned URLs, avoiding API Gateway payload limits for image files.
 - Dual runtime mode: mock data for local/frontend review, real AWS API mode when `VITE_API_BASE_URL` is set.
 - Cognito sign-in with API Gateway JWT authorization and owner-scoped S3/DynamoDB records.
+- Event/workspace data model that scopes people, photos, matches, and uploads to a selected private event.
+- Consent-attested reference intake stores consent status/source metadata with guest profile records.
+- Human-in-the-loop review workflow for match candidates: `matched`, `needs_review`, `approved`, and `rejected`.
 - DynamoDB-backed upload sessions that verify issued S3 keys, object size, content type, and upload metadata before processing.
 - Owner-scoped delete flows for removing uploaded photos and reference/person records from S3, DynamoDB, and Rekognition.
 - Event-gallery UX focused on guest reference intake, event photo upload, review queue triage, and per-person galleries.
@@ -38,7 +41,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - Private photo storage with short-lived signed preview URLs rather than public S3 objects.
 - Explicit low-volume cost controls: max files per batch, upload size limits, bounded people/reference comparisons, API throttling, and short CloudWatch log retention.
 - Terraform-managed backend resources with `terraform destroy` support for cleanup.
-- Clear match states for user review: `matched`, `review`, and `unknown` in the shared API types.
+- Clear match states for responsible review: `matched`, `needs_review`, `approved`, `rejected`, and `unknown` in the shared API types.
 
 ## Architecture
 
@@ -121,6 +124,7 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 - Cognito protects API routes with JWT authorization.
 - Lambda scopes S3 keys and DynamoDB reads/writes to the authenticated Cognito user.
 - Upload processing requires a valid upload session and verifies the S3 object before invoking Rekognition.
+- Reference uploads require explicit consent confirmation in the UI and store consent metadata with the person record.
 - Users can remove their uploaded photos and reference/person records; deletes remove private S3 objects and related metadata.
 - Face matching is probabilistic; review lower-confidence matches before using a gallery outside personal photo organization.
 - Upload sessions are marked `processed` or `failed` so partial processing failures are visible in backend state.
@@ -132,7 +136,7 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 - The MVP backend uses bounded `CompareFaces` checks against stored reference images; this is simple and deployable, but cost grows with `photos * people * references`.
 - Different face angles and poor image quality can reduce match confidence; add more guest reference photos and use the review queue for use cases where this matters.
 - The current Lambda does not crop every face in group photos before searching. Large group-photo support would require a deeper face-detection/cropping pipeline.
-- No moderation, consent-management, invite-link, share-link, admin review, or retention workflow is included.
+- No moderation, guest self-service invite links, share links, role-based admin workflow, or retention scheduler is included.
 - Correctional surveillance, public-space tracking, inmate tracking, and other law-enforcement identification workflows are explicitly non-target use cases for this project.
 - Reference images are managed at the person level in the current UI rather than as individually editable reference assets.
 - The current frontend does not refresh Cognito tokens in place; users sign in again after the token expires.

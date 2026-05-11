@@ -14,11 +14,13 @@ from botocore.exceptions import ClientError
 
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
+EVENTS_TABLE = os.environ["EVENTS_TABLE"]
 PEOPLE_TABLE = os.environ["PEOPLE_TABLE"]
 PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 MATCHES_TABLE = os.environ["MATCHES_TABLE"]
 UPLOADS_TABLE = os.environ["UPLOADS_TABLE"]
 COLLECTION_ID = os.environ["COLLECTION_ID"]
+EVENTS_OWNER_INDEX = os.environ.get("EVENTS_OWNER_INDEX", "owner_id-created_at-index")
 PEOPLE_OWNER_INDEX = os.environ.get("PEOPLE_OWNER_INDEX", "owner_id-name-index")
 PHOTOS_OWNER_INDEX = os.environ.get("PHOTOS_OWNER_INDEX", "owner_id-uploaded_at-index")
 MATCHES_OWNER_INDEX = os.environ.get("MATCHES_OWNER_INDEX", "owner_id-photo_id-index")
@@ -39,6 +41,7 @@ URL_EXPIRES_SECONDS = int(os.environ.get("URL_EXPIRES_SECONDS", "3600"))
 s3 = boto3.client("s3")
 rekognition = boto3.client("rekognition")
 dynamodb = boto3.resource("dynamodb")
+events_table = dynamodb.Table(EVENTS_TABLE)
 people_table = dynamodb.Table(PEOPLE_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
 matches_table = dynamodb.Table(MATCHES_TABLE)
@@ -57,12 +60,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         else:
             user_id = get_request_user_id(event)
 
-            if method == "GET" and path == "/library":
-                result = response(200, get_library(user_id), event)
+            if method == "GET" and path == "/events":
+                result = response(200, {"events": list_events(user_id)}, event)
+            elif method == "POST" and path == "/events":
+                result = response(201, {"event": create_event(read_json(event), user_id)}, event)
+            elif method == "GET" and path == "/library":
+                event_id = get_query_param(event, "eventId")
+                result = response(200, get_library(user_id, event_id), event)
             elif method == "POST" and path == "/uploads/presign":
                 result = response(200, presign_uploads(read_json(event), user_id), event)
             elif method == "POST" and path == "/uploads/process":
                 result = response(200, process_uploads(read_json(event), user_id), event)
+            elif method == "PATCH" and path.startswith("/matches/"):
+                photo_id, person_id = extract_match_ids(path)
+                result = response(
+                    200,
+                    {
+                        "match": update_match_status(
+                            photo_id, person_id, read_json(event), user_id
+                        )
+                    },
+                    event,
+                )
             elif method == "DELETE" and path.startswith("/photos/"):
                 result = response(
                     200,
@@ -104,7 +123,94 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     return result
 
 
+def create_event(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
+    name = validate_event_name(payload.get("name"))
+    now = iso_now()
+    event_id = f"event-{s3_owner_prefix(user_id)}-{slugify(name)}-{uuid.uuid4().hex[:8]}"
+
+    event_item = {
+        "id": event_id,
+        "owner_id": user_id,
+        "name": name,
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    }
+    events_table.put_item(Item=event_item)
+    return normalize_event(event_item)
+
+
+def list_events(user_id: str) -> list[dict[str, Any]]:
+    ensure_default_event(user_id)
+    events = [
+        normalize_event(item)
+        for item in query_owner_items(events_table, EVENTS_OWNER_INDEX, user_id)
+    ]
+    return sorted(events, key=lambda item: item["createdAt"], reverse=True)
+
+
+def ensure_default_event(user_id: str) -> dict[str, Any]:
+    event_id = default_event_id(user_id)
+    event = events_table.get_item(Key={"id": event_id}).get("Item")
+    if event and event.get("owner_id") == user_id:
+        return event
+
+    now = iso_now()
+    event = {
+        "id": event_id,
+        "owner_id": user_id,
+        "name": "Default Event",
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    }
+    events_table.put_item(Item=event)
+    return event
+
+
+def get_owned_event(event_id: str | None, user_id: str) -> dict[str, Any]:
+    if not event_id:
+        return ensure_default_event(user_id)
+
+    event = events_table.get_item(Key={"id": event_id}).get("Item")
+    if not event or event.get("owner_id") != user_id:
+        raise LookupError("Event was not found.")
+    return event
+
+
+def validate_event_name(value: Any) -> str:
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(name) < 2:
+        raise ValueError("Event name is required.")
+    if len(name) > 80:
+        raise ValueError("Event name must be 80 characters or fewer.")
+    return name
+
+
+def normalize_event(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "createdAt": item.get("created_at", ""),
+        "status": item.get("status", "active"),
+    }
+
+
+def default_event_id(user_id: str) -> str:
+    return f"event-{s3_owner_prefix(user_id)}-default"
+
+
+def item_event_id(item: dict[str, Any], user_id: str) -> str:
+    return str(item.get("event_id") or default_event_id(user_id))
+
+
+def event_s3_token(event_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", event_id).strip("-") or "event"
+
+
 def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
+    event = get_owned_event(optional_string(payload.get("eventId")), user_id)
+    event_id = event["id"]
     mode = validate_mode(payload.get("mode"))
     files = validate_files(payload.get("files"))
     upload_items = []
@@ -117,7 +223,7 @@ def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
         upload_id = f"upload-{uuid.uuid4()}"
         content_type = clean_content_type(file_item.get("type"))
         key = (
-            f"users/{owner_prefix}/{mode}/{now_prefix}/"
+            f"users/{owner_prefix}/events/{event_s3_token(event_id)}/{mode}/{now_prefix}/"
             f"{uuid.uuid4()}-{safe_filename(file_item['name'])}"
         )
         url = s3.generate_presigned_url(
@@ -135,6 +241,7 @@ def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
             Item={
                 "id": upload_id,
                 "owner_id": user_id,
+                "event_id": event_id,
                 "mode": mode,
                 "key": key,
                 "name": file_item["name"],
@@ -162,24 +269,50 @@ def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
 
 
 def process_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
+    event = get_owned_event(optional_string(payload.get("eventId")), user_id)
+    event_id = event["id"]
     mode = validate_mode(payload.get("mode"))
-    files = validate_processed_files(payload.get("files"), mode, user_id)
+    files = validate_processed_files(payload.get("files"), mode, user_id, event_id)
 
     if mode == "references":
-        return process_reference_files(files, user_id)
+        consent = validate_reference_consent(payload.get("consent"))
+        return process_reference_files(files, user_id, event_id, consent)
 
-    return process_photo_files(files, user_id)
+    return process_photo_files(files, user_id, event_id)
 
 
-def process_reference_files(files: list[dict[str, Any]], user_id: str) -> dict[str, Any]:
+def validate_reference_consent(consent: Any) -> dict[str, str]:
+    if not isinstance(consent, dict) or consent.get("confirmed") is not True:
+        raise ValueError("Reference uploads require confirmed guest consent.")
+
+    source = str(consent.get("source") or "owner_attested").strip()
+    if source not in {"owner_attested", "guest_submitted"}:
+        raise ValueError("Unsupported consent source.")
+
+    return {
+        "consentStatus": "captured",
+        "consentSource": source,
+        "consentCapturedAt": iso_now(),
+    }
+
+
+def process_reference_files(
+    files: list[dict[str, Any]],
+    user_id: str,
+    event_id: str,
+    consent: dict[str, str],
+) -> dict[str, Any]:
     people = []
     owner_prefix = s3_owner_prefix(user_id)
+    event_token = event_s3_token(event_id)
 
     for file_item in files:
-        claim_upload_session(file_item, mode="references", user_id=user_id)
+        claim_upload_session(
+            file_item, mode="references", user_id=user_id, event_id=event_id
+        )
         try:
             person_name = name_from_filename(file_item["name"])
-            person_id = f"person-{owner_prefix}-{slugify(person_name)}"
+            person_id = f"person-{owner_prefix}-{event_token}-{slugify(person_name)}"
 
             indexed = rekognition.index_faces(
                 CollectionId=COLLECTION_ID,
@@ -204,8 +337,10 @@ def process_reference_files(files: list[dict[str, Any]], user_id: str) -> dict[s
             updated = people_table.update_item(
                 Key={"id": person_id},
                 UpdateExpression=(
-                    "SET owner_id = :owner_id, #name = :name, initials = :initials, "
-                    "updated_at = :now, "
+                    "SET owner_id = :owner_id, event_id = :event_id, #name = :name, "
+                    "initials = :initials, updated_at = :now, "
+                    "consent_status = :consent_status, consent_source = :consent_source, "
+                    "consent_captured_at = :consent_captured_at, "
                     "reference_keys = list_append(if_not_exists(reference_keys, :empty), :keys), "
                     "face_ids = list_append(if_not_exists(face_ids, :empty), :face_ids) "
                     "ADD reference_count :one"
@@ -213,9 +348,13 @@ def process_reference_files(files: list[dict[str, Any]], user_id: str) -> dict[s
                 ExpressionAttributeNames={"#name": "name"},
                 ExpressionAttributeValues={
                     ":owner_id": user_id,
+                    ":event_id": event_id,
                     ":name": person_name,
                     ":initials": initials_from_name(person_name),
                     ":now": now,
+                    ":consent_status": consent["consentStatus"],
+                    ":consent_source": consent["consentSource"],
+                    ":consent_captured_at": consent["consentCapturedAt"],
                     ":empty": [],
                     ":keys": [file_item["key"]],
                     ":face_ids": face_ids,
@@ -232,16 +371,20 @@ def process_reference_files(files: list[dict[str, Any]], user_id: str) -> dict[s
     return {"people": people, "photos": []}
 
 
-def process_photo_files(files: list[dict[str, Any]], user_id: str) -> dict[str, Any]:
-    people = query_owner_items(people_table, PEOPLE_OWNER_INDEX, user_id)
+def process_photo_files(
+    files: list[dict[str, Any]], user_id: str, event_id: str
+) -> dict[str, Any]:
+    people = query_owner_event_items(people_table, PEOPLE_OWNER_INDEX, user_id, event_id)
     people = sorted(people, key=lambda item: item.get("name", ""))[:MAX_COMPARE_PEOPLE]
     photos = []
     owner_prefix = s3_owner_prefix(user_id)
 
     for file_item in files:
-        claim_upload_session(file_item, mode="photos", user_id=user_id)
+        claim_upload_session(
+            file_item, mode="photos", user_id=user_id, event_id=event_id
+        )
         try:
-            photo_id = f"photo-{owner_prefix}-{uuid.uuid4()}"
+            photo_id = f"photo-{owner_prefix}-{event_s3_token(event_id)}-{uuid.uuid4()}"
             now = iso_now()
             matches = find_matches(file_item["key"], people)
 
@@ -249,6 +392,7 @@ def process_photo_files(files: list[dict[str, Any]], user_id: str) -> dict[str, 
                 Item={
                     "id": photo_id,
                     "owner_id": user_id,
+                    "event_id": event_id,
                     "name": file_item["name"],
                     "key": file_item["key"],
                     "size": int(file_item["size"]),
@@ -263,6 +407,7 @@ def process_photo_files(files: list[dict[str, Any]], user_id: str) -> dict[str, 
                         "photo_id": photo_id,
                         "person_id": match["personId"],
                         "owner_id": user_id,
+                        "event_id": event_id,
                         "person_name": match["personName"],
                         "confidence": Decimal(str(round(match["confidence"], 2))),
                         "status": match["status"],
@@ -315,7 +460,7 @@ def find_matches(photo_key: str, people: list[dict[str, Any]]) -> list[dict[str,
                 )
 
         if best_similarity >= REVIEW_THRESHOLD:
-            status = "matched" if best_similarity >= MATCHED_THRESHOLD else "review"
+            status = "matched" if best_similarity >= MATCHED_THRESHOLD else "needs_review"
             matches.append(
                 {
                     "personId": person["id"],
@@ -328,27 +473,30 @@ def find_matches(photo_key: str, people: list[dict[str, Any]]) -> list[dict[str,
     return sorted(matches, key=lambda item: item["confidence"], reverse=True)
 
 
-def get_library(user_id: str) -> dict[str, Any]:
+def get_library(user_id: str, event_id: str | None = None) -> dict[str, Any]:
+    event = get_owned_event(event_id, user_id)
+    active_event_id = event["id"]
     people = [
         normalize_person(item)
-        for item in query_owner_items(people_table, PEOPLE_OWNER_INDEX, user_id)
+        for item in query_owner_event_items(
+            people_table, PEOPLE_OWNER_INDEX, user_id, active_event_id
+        )
     ]
-    raw_photos = query_owner_items(
-        photos_table, PHOTOS_OWNER_INDEX, user_id, scan_forward=False
+    raw_photos = query_owner_event_items(
+        photos_table,
+        PHOTOS_OWNER_INDEX,
+        user_id,
+        active_event_id,
+        scan_forward=False,
     )
-    raw_matches = query_owner_items(matches_table, MATCHES_OWNER_INDEX, user_id)
+    raw_matches = query_owner_event_items(
+        matches_table, MATCHES_OWNER_INDEX, user_id, active_event_id
+    )
     matches_by_photo: dict[str, list[dict[str, Any]]] = {}
 
     for item in raw_matches:
         photo_id = item["photo_id"]
-        matches_by_photo.setdefault(photo_id, []).append(
-            {
-                "personId": item["person_id"],
-                "personName": item["person_name"],
-                "confidence": float(item["confidence"]),
-                "status": item["status"],
-            }
-        )
+        matches_by_photo.setdefault(photo_id, []).append(normalize_match(item))
 
     photos = []
     for item in raw_photos:
@@ -368,6 +516,13 @@ def get_library(user_id: str) -> dict[str, Any]:
         )
 
     return {
+        "event": {
+            **normalize_event(event),
+            "guestCount": len(people),
+            "photoCount": len(photos),
+            "reviewCount": count_review_matches(photos),
+        },
+        "events": list_events(user_id),
         "people": sorted(people, key=lambda item: item["name"]),
         "photos": sorted(photos, key=lambda item: item["uploadedAt"], reverse=True),
     }
@@ -389,7 +544,8 @@ def delete_photo(photo_id: str, user_id: str) -> dict[str, Any]:
         matches_table.delete_item(
             Key={"photo_id": photo_id, "person_id": match["person_id"]}
         )
-        decrement_person_photo_count(match["person_id"])
+        if normalize_status(match.get("status")) != "rejected":
+            decrement_person_photo_count(match["person_id"])
         deleted_matches += 1
 
     photos_table.delete_item(
@@ -424,7 +580,8 @@ def delete_person(person_id: str, user_id: str) -> dict[str, Any]:
         matches_table.delete_item(
             Key={"photo_id": match["photo_id"], "person_id": person_id}
         )
-        decrement_photo_match_count(match["photo_id"])
+        if normalize_status(match.get("status")) != "rejected":
+            decrement_photo_match_count(match["photo_id"])
         deleted_matches += 1
 
     people_table.delete_item(
@@ -440,6 +597,81 @@ def delete_person(person_id: str, user_id: str) -> dict[str, Any]:
     }
 
 
+def update_match_status(
+    photo_id: str, person_id: str, payload: dict[str, Any], user_id: str
+) -> dict[str, Any]:
+    status = validate_review_status(payload.get("status"))
+    match = get_match_item(photo_id, person_id, user_id)
+    previous_status = normalize_status(match.get("status"))
+    now = iso_now()
+
+    matches_table.update_item(
+        Key={"photo_id": photo_id, "person_id": person_id},
+        UpdateExpression=(
+            "SET #status = :status, reviewed_at = :reviewed_at, updated_at = :updated_at"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":status": status,
+            ":reviewed_at": now,
+            ":updated_at": now,
+        },
+    )
+
+    if previous_status != "rejected" and status == "rejected":
+        decrement_person_photo_count(person_id)
+        decrement_photo_match_count(photo_id)
+    elif previous_status == "rejected" and status != "rejected":
+        increment_person_photo_count(person_id)
+        increment_photo_match_count(photo_id)
+
+    return normalize_match({**match, "status": status, "reviewed_at": now})
+
+
+def get_match_item(photo_id: str, person_id: str, user_id: str) -> dict[str, Any]:
+    match = matches_table.get_item(
+        Key={"photo_id": photo_id, "person_id": person_id}
+    ).get("Item")
+    if not match or match.get("owner_id") != user_id:
+        raise LookupError("Match was not found.")
+    return match
+
+
+def validate_review_status(value: Any) -> str:
+    status = normalize_status(value)
+    if status not in {"approved", "rejected"}:
+        raise ValueError("status must be approved or rejected.")
+    return status
+
+
+def normalize_status(value: Any) -> str:
+    status = str(value or "unknown").strip().lower().replace("-", "_")
+    if status == "review":
+        return "needs_review"
+    if status in {"matched", "needs_review", "approved", "rejected"}:
+        return status
+    return "unknown"
+
+
+def normalize_match(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "personId": item["person_id"],
+        "personName": item["person_name"],
+        "confidence": float(item["confidence"]),
+        "status": normalize_status(item.get("status")),
+        "reviewedAt": item.get("reviewed_at", ""),
+    }
+
+
+def count_review_matches(photos: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for photo in photos
+        for match in photo["matches"]
+        if match["status"] == "needs_review"
+    )
+
+
 def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item["id"],
@@ -447,6 +679,7 @@ def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
         "initials": item.get("initials") or initials_from_name(item["name"]),
         "referenceCount": int(item.get("reference_count") or 0),
         "photoCount": int(item.get("photo_count") or 0),
+        "consentStatus": item.get("consent_status", "unknown"),
     }
 
 
@@ -471,9 +704,12 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
     return cleaned
 
 
-def validate_processed_files(files: Any, mode: str, user_id: str) -> list[dict[str, Any]]:
+def validate_processed_files(
+    files: Any, mode: str, user_id: str, event_id: str | None = None
+) -> list[dict[str, Any]]:
     cleaned = validate_files(files)
-    expected_prefix = f"users/{s3_owner_prefix(user_id)}/{mode}/"
+    active_event_id = event_id or default_event_id(user_id)
+    expected_prefix = f"users/{s3_owner_prefix(user_id)}/"
     for index, file_item in enumerate(files):
         upload_id = str(file_item.get("uploadId") or "").strip()
         key = str(file_item.get("key") or "").strip()
@@ -483,12 +719,15 @@ def validate_processed_files(files: Any, mode: str, user_id: str) -> list[dict[s
             raise ValueError("Each processed file needs an S3 key.")
         if not key.startswith(expected_prefix):
             raise ValueError("Uploaded file key is outside the authenticated user scope.")
-        session = validate_upload_session(upload_id, key, mode, cleaned[index], user_id)
+        session = validate_upload_session(
+            upload_id, key, mode, cleaned[index], user_id, active_event_id
+        )
         verified = verify_s3_upload(session)
         cleaned[index]["uploadId"] = upload_id
         cleaned[index]["key"] = key
         cleaned[index]["size"] = verified["size"]
         cleaned[index]["type"] = verified["content_type"]
+        cleaned[index]["eventId"] = active_event_id
     return cleaned
 
 
@@ -520,6 +759,23 @@ def extract_path_id(path: str, prefix: str) -> str:
     if not value or "/" in value:
         raise ValueError("Invalid resource identifier.")
     return value
+
+
+def extract_match_ids(path: str) -> tuple[str, str]:
+    parts = path.removeprefix("/matches/").strip("/").split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError("Invalid match identifier.")
+    return unquote(parts[0]), unquote(parts[1])
+
+
+def get_query_param(event: dict[str, Any], key: str) -> str | None:
+    params = event.get("queryStringParameters") or {}
+    return optional_string(params.get(key))
+
+
+def optional_string(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def get_request_user_id(event: dict[str, Any]) -> str:
@@ -556,6 +812,20 @@ def query_owner_items(
         items.extend(response.get("Items", []))
 
     return items
+
+
+def query_owner_event_items(
+    table: Any,
+    index_name: str,
+    user_id: str,
+    event_id: str,
+    scan_forward: bool = True,
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in query_owner_items(table, index_name, user_id, scan_forward)
+        if item_event_id(item, user_id) == event_id
+    ]
 
 
 def query_all_items(table: Any, **query_kwargs: Any) -> list[dict[str, Any]]:
@@ -602,12 +872,29 @@ def decrement_photo_match_count(photo_id: str) -> None:
     )
 
 
+def increment_person_photo_count(person_id: str) -> None:
+    people_table.update_item(
+        Key={"id": person_id},
+        UpdateExpression="SET updated_at = :now ADD photo_count :one",
+        ExpressionAttributeValues={":one": 1, ":now": iso_now()},
+    )
+
+
+def increment_photo_match_count(photo_id: str) -> None:
+    photos_table.update_item(
+        Key={"id": photo_id},
+        UpdateExpression="ADD match_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+
 def validate_upload_session(
     upload_id: str,
     key: str,
     mode: str,
     file_item: dict[str, Any],
     user_id: str,
+    event_id: str,
 ) -> dict[str, Any]:
     response = uploads_table.get_item(Key={"id": upload_id})
     session = response.get("Item")
@@ -615,6 +902,8 @@ def validate_upload_session(
         raise ValueError("Upload session was not found.")
     if session.get("owner_id") != user_id:
         raise ValueError("Upload session does not belong to the authenticated user.")
+    if str(session.get("event_id") or default_event_id(user_id)) != event_id:
+        raise ValueError("Upload session does not belong to the selected event.")
     if session.get("mode") != mode or session.get("key") != key:
         raise ValueError("Upload session does not match the requested file.")
     if session.get("status") != "issued":
@@ -655,14 +944,17 @@ def verify_s3_upload(session: dict[str, Any]) -> dict[str, Any]:
     return {"size": size, "content_type": content_type}
 
 
-def claim_upload_session(file_item: dict[str, Any], mode: str, user_id: str) -> None:
+def claim_upload_session(
+    file_item: dict[str, Any], mode: str, user_id: str, event_id: str
+) -> None:
     try:
         uploads_table.update_item(
             Key={"id": file_item["uploadId"]},
             UpdateExpression="SET #status = :processing, processing_at = :now",
             ConditionExpression=(
                 "#status = :issued AND owner_id = :owner_id AND #mode = :mode "
-                "AND #object_key = :object_key AND expires_at >= :now_epoch"
+                "AND event_id = :event_id AND #object_key = :object_key "
+                "AND expires_at >= :now_epoch"
             ),
             ExpressionAttributeNames={
                 "#status": "status",
@@ -673,6 +965,7 @@ def claim_upload_session(file_item: dict[str, Any], mode: str, user_id: str) -> 
                 ":issued": "issued",
                 ":processing": "processing",
                 ":owner_id": user_id,
+                ":event_id": event_id,
                 ":mode": mode,
                 ":object_key": file_item["key"],
                 ":now": iso_now(),
@@ -751,7 +1044,7 @@ def cors_headers(event: dict[str, Any]) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": allow_origin,
         "Access-Control-Allow-Headers": "content-type,authorization",
-        "Access-Control-Allow-Methods": "DELETE,GET,POST,OPTIONS",
+        "Access-Control-Allow-Methods": "DELETE,GET,PATCH,POST,OPTIONS",
         "Content-Type": "application/json",
     }
 

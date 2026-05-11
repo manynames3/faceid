@@ -46,6 +46,7 @@ describe("submitUpload", () => {
     const file = new File(["image-bytes"], "photo.jpg", { type: "image/jpeg" });
 
     await submitUpload({
+      eventId: "event-1",
       files: [file],
       mode: "photos",
       people: [],
@@ -67,6 +68,7 @@ describe("submitUpload", () => {
       "Content-Type": "application/json",
     });
     expect(JSON.parse(String(processOptions.body))).toEqual({
+      eventId: "event-1",
       files: [
         {
           key: "users/user-1/photos/2026/05/09/photo.jpg",
@@ -76,6 +78,12 @@ describe("submitUpload", () => {
           uploadId: "upload-123",
         },
       ],
+      mode: "photos",
+    });
+
+    const presignOptions = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(presignOptions.body))).toMatchObject({
+      eventId: "event-1",
       mode: "photos",
     });
   });
@@ -107,6 +115,94 @@ describe("delete requests", () => {
     expect(fetchMock.mock.calls[1][1]).toMatchObject({
       headers: { Authorization: "Bearer id-token" },
       method: "DELETE",
+    });
+  });
+});
+
+describe("events and review updates", () => {
+  it("loads and creates authenticated event workspaces", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          events: [
+            {
+              createdAt: "2026-05-11T00:00:00Z",
+              id: "event-1",
+              name: "Spring Gala",
+              status: "active",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          event: {
+            createdAt: "2026-05-11T00:00:00Z",
+            id: "event-2",
+            name: "Roadshow",
+            status: "active",
+          },
+        }),
+      );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEvent, fetchEvents } = await import("./api");
+
+    const events = await fetchEvents(authSession);
+    const created = await createEvent("Roadshow", authSession);
+
+    expect(events[0].id).toBe("event-1");
+    expect(created.id).toBe("event-2");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.test/events");
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      headers: {
+        Authorization: "Bearer id-token",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+  });
+
+  it("patches match review decisions", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        match: {
+          confidence: 82.5,
+          personId: "person-1",
+          personName: "Jane Doe",
+          status: "approved",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { updateMatchStatus } = await import("./api");
+    const match = await updateMatchStatus({
+      photoId: "photo 1",
+      personId: "person/1",
+      session: authSession,
+      status: "approved",
+    });
+
+    expect(match?.status).toBe("approved");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/matches/photo%201/person%2F1",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      headers: {
+        Authorization: "Bearer id-token",
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+    });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      status: "approved",
     });
   });
 });
