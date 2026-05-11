@@ -31,7 +31,7 @@ export const initialPhotos: PhotoAsset[] = [
     size: 2_412_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
     previewUrl:
-      "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80",
+      "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&crop=faces&w=900&q=80",
     matches: [
       {
         personId: "person-ava-morales",
@@ -53,7 +53,7 @@ export const initialPhotos: PhotoAsset[] = [
     size: 3_810_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 33).toISOString(),
     previewUrl:
-      "https://images.unsplash.com/photo-1529634806980-85c3dd6d34ac?auto=format&fit=crop&w=900&q=80",
+      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&crop=faces&w=900&q=80",
     matches: [
       {
         personId: "person-maya-johnson",
@@ -69,7 +69,7 @@ export const initialPhotos: PhotoAsset[] = [
     size: 1_921_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
     previewUrl:
-      "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=900&q=80",
+      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&crop=faces&w=900&q=80",
     matches: [
       {
         personId: "person-ava-morales",
