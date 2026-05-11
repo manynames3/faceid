@@ -29,6 +29,8 @@ Server flow:
 6. Call Rekognition `IndexFaces` with the person identifier as metadata.
 7. Save the Rekognition face ID, person ID, S3 key, and source filename.
 
+Reference images are currently managed through the person record. Deleting a person removes their stored reference image keys, Rekognition face IDs, and related matches.
+
 ## Photo Uploads
 
 Server flow:
@@ -47,6 +49,8 @@ Server flow:
 
 ```text
 GET /library
+DELETE /people/{personId}
+DELETE /photos/{photoId}
 POST /uploads/presign
 POST /uploads/process
 ```
@@ -140,6 +144,33 @@ type PhotoMatch = {
 ### GET /library
 
 Returns the same `UploadResult` shape with the authenticated user's known people and recent photos.
+
+### DELETE /photos/{photoId}
+
+Deletes one uploaded photo owned by the authenticated user. The Lambda function removes the private S3 object, deletes the photo row, deletes the photo's match rows, and decrements affected people counters.
+
+Response:
+
+```json
+{
+  "deletedPhotoId": "photo-id",
+  "deletedMatches": 1
+}
+```
+
+### DELETE /people/{personId}
+
+Deletes one person/reference record owned by the authenticated user. The Lambda function removes stored reference S3 objects, deletes indexed Rekognition face IDs, deletes related match rows, and decrements affected photo counters. Matched event photos remain in the library without that person's match.
+
+Response:
+
+```json
+{
+  "deletedPersonId": "person-id",
+  "deletedMatches": 2,
+  "deletedReferenceImages": 1
+}
+```
 
 ## Thresholds
 

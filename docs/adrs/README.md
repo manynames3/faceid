@@ -10,3 +10,4 @@ This directory captures the main architecture decisions for FaceID.
 - [ADR 0006: Use Cognito JWTs For API Auth And User Isolation](0006-cognito-jwt-user-isolation.md)
 - [ADR 0007: Verify Upload Sessions Before Processing S3 Objects](0007-verified-upload-sessions.md)
 - [ADR 0008: Add Lightweight CI, Observability, And Cost Controls](0008-lightweight-ci-observability-cost-controls.md)
+- [ADR 0009: Add Owner-Scoped Delete Workflows](0009-owner-scoped-delete-workflows.md)

@@ -230,7 +230,23 @@ button {
 }
 
 .person {
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 4px;
+  padding: 4px;
+}
+
+.person-main {
+  display: grid;
   grid-template-columns: 38px 1fr;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0 6px;
+  text-align: left;
 }
 
 .avatar {
@@ -252,6 +268,29 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.icon-button:hover:not(:disabled) {
+  border-color: #f0c0b4;
+  background: #fff3ef;
+  color: var(--accent-2);
+}
+
+.icon-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .workspace {
@@ -465,12 +504,43 @@ button {
   background: var(--surface);
 }
 
+.photo-media {
+  position: relative;
+}
+
 .photo-card img {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
   background: #e8ece8;
+}
+
+.photo-delete-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgb(23 33 31 / 14%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 92%);
+  color: var(--muted);
+  box-shadow: 0 10px 24px rgb(23 33 31 / 15%);
+}
+
+.photo-delete-button:hover:not(:disabled) {
+  border-color: #f0c0b4;
+  background: #fff3ef;
+  color: var(--accent-2);
+}
+
+.photo-delete-button:disabled {
+  cursor: wait;
+  opacity: 0.75;
 }
 
 .photo-card-body {

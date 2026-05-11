@@ -46,6 +46,36 @@ export async function fetchLibrary(session?: AuthSession | null): Promise<Upload
   return response.json() as Promise<UploadResult>;
 }
 
+export async function deletePhoto(photoId: string, session?: AuthSession | null) {
+  if (!apiBaseUrl) {
+    return;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/photos/${encodeURIComponent(photoId)}`, {
+    headers: authHeaders(session),
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Photo delete failed with status ${response.status}`);
+  }
+}
+
+export async function deletePerson(personId: string, session?: AuthSession | null) {
+  if (!apiBaseUrl) {
+    return;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/people/${encodeURIComponent(personId)}`, {
+    headers: authHeaders(session),
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Person delete failed with status ${response.status}`);
+  }
+}
+
 export async function submitUpload({
   mode,
   files,

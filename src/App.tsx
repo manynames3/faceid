@@ -10,13 +10,14 @@ import {
   LogOut,
   Search,
   ShieldCheck,
+  Trash2,
   UploadCloud,
   UserRoundPlus,
   UsersRound,
 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { fetchLibrary, hasConfiguredApi, submitUpload } from "./api";
+import { deletePerson, deletePhoto, fetchLibrary, hasConfiguredApi, submitUpload } from "./api";
 import {
   completeSignInFromUrl,
   getStoredSession,
@@ -45,6 +46,12 @@ function App() {
     hasConfiguredApi && hasConfiguredAuth,
   );
   const [isUploading, setIsUploading] = useState(false);
+  const [deletingPhotoIds, setDeletingPhotoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [deletingPersonIds, setDeletingPersonIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [notice, setNotice] = useState<string | null>(
     hasConfiguredApi
       ? hasConfiguredAuth
@@ -181,7 +188,7 @@ function App() {
 
       if (result.photos.length > 0) {
         setPhotos((current) => [...result.photos, ...current]);
-        bumpPhotoCounts(result.photos, setPeople);
+        adjustPhotoCounts(result.photos, 1, setPeople);
         setActivePersonId(allPeopleId);
       }
 
@@ -194,6 +201,74 @@ function App() {
       setNotice(error instanceof Error ? error.message : "Upload failed.");
     } finally {
       setIsUploading(false);
+    }
+  }
+
+  async function handleDeletePhoto(photo: PhotoAsset) {
+    if (!window.confirm(`Remove ${photo.name} from this library?`)) {
+      return;
+    }
+    if (hasConfiguredApi && hasConfiguredAuth && !authSession) {
+      setNotice("Sign in before deleting photos.");
+      return;
+    }
+
+    setDeletingPhotoIds((current) => new Set(current).add(photo.id));
+    setNotice(null);
+
+    try {
+      await deletePhoto(photo.id, authSession);
+      setPhotos((current) => current.filter((item) => item.id !== photo.id));
+      adjustPhotoCounts([photo], -1, setPeople);
+      setNotice(`${photo.name} removed.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Photo delete failed.");
+    } finally {
+      setDeletingPhotoIds((current) => {
+        const next = new Set(current);
+        next.delete(photo.id);
+        return next;
+      });
+    }
+  }
+
+  async function handleDeletePerson(person: Person) {
+    if (
+      !window.confirm(
+        `Remove ${person.name}, their reference images, and their photo matches?`,
+      )
+    ) {
+      return;
+    }
+    if (hasConfiguredApi && hasConfiguredAuth && !authSession) {
+      setNotice("Sign in before deleting people.");
+      return;
+    }
+
+    setDeletingPersonIds((current) => new Set(current).add(person.id));
+    setNotice(null);
+
+    try {
+      await deletePerson(person.id, authSession);
+      setPeople((current) => current.filter((item) => item.id !== person.id));
+      setPhotos((current) =>
+        current.map((photo) => ({
+          ...photo,
+          matches: photo.matches.filter((match) => match.personId !== person.id),
+        })),
+      );
+      if (activePersonId === person.id) {
+        setActivePersonId(allPeopleId);
+      }
+      setNotice(`${person.name} removed.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Person delete failed.");
+    } finally {
+      setDeletingPersonIds((current) => {
+        const next = new Set(current);
+        next.delete(person.id);
+        return next;
+      });
     }
   }
 
@@ -284,18 +359,36 @@ function App() {
           </div>
           <div className="people-list">
             {people.map((person) => (
-              <button
+              <div
                 className={activePersonId === person.id ? "person active" : "person"}
                 key={person.id}
-                type="button"
-                onClick={() => setActivePersonId(person.id)}
               >
-                <span className="avatar">{person.initials}</span>
-                <span className="person-copy">
-                  <span>{person.name}</span>
-                  <small>{person.photoCount} photos</small>
-                </span>
-              </button>
+                <button
+                  className="person-main"
+                  type="button"
+                  onClick={() => setActivePersonId(person.id)}
+                >
+                  <span className="avatar">{person.initials}</span>
+                  <span className="person-copy">
+                    <span>{person.name}</span>
+                    <small>{person.photoCount} photos</small>
+                  </span>
+                </button>
+                <button
+                  aria-label={`Remove ${person.name}`}
+                  className="icon-button"
+                  disabled={deletingPersonIds.has(person.id)}
+                  onClick={() => void handleDeletePerson(person)}
+                  title={`Remove ${person.name}`}
+                  type="button"
+                >
+                  {deletingPersonIds.has(person.id) ? (
+                    <Loader2 className="spin" size={15} aria-hidden="true" />
+                  ) : (
+                    <Trash2 size={15} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -369,7 +462,11 @@ function App() {
           <Metric label="Review" value={reviewCount.toString()} tone="warning" />
         </section>
 
-        <PhotoGrid photos={visiblePhotos} />
+        <PhotoGrid
+          deletingPhotoIds={deletingPhotoIds}
+          onDeletePhoto={handleDeletePhoto}
+          photos={visiblePhotos}
+        />
       </section>
     </main>
   );
@@ -452,7 +549,15 @@ function Metric({
   );
 }
 
-function PhotoGrid({ photos }: { photos: PhotoAsset[] }) {
+function PhotoGrid({
+  deletingPhotoIds,
+  onDeletePhoto,
+  photos,
+}: {
+  deletingPhotoIds: Set<string>;
+  onDeletePhoto: (photo: PhotoAsset) => void;
+  photos: PhotoAsset[];
+}) {
   if (photos.length === 0) {
     return (
       <div className="empty-state">
@@ -466,7 +571,23 @@ function PhotoGrid({ photos }: { photos: PhotoAsset[] }) {
     <section className="photo-grid" aria-label="Matched photos">
       {photos.map((photo) => (
         <article className="photo-card" key={photo.id}>
-          <img src={photo.previewUrl} alt="" />
+          <div className="photo-media">
+            <img src={photo.previewUrl} alt="" />
+            <button
+              aria-label={`Remove ${photo.name}`}
+              className="photo-delete-button"
+              disabled={deletingPhotoIds.has(photo.id)}
+              onClick={() => onDeletePhoto(photo)}
+              title={`Remove ${photo.name}`}
+              type="button"
+            >
+              {deletingPhotoIds.has(photo.id) ? (
+                <Loader2 className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <Trash2 size={16} aria-hidden="true" />
+              )}
+            </button>
+          </div>
           <div className="photo-card-body">
             <div className="photo-title-row">
               <strong title={photo.name}>{photo.name}</strong>
@@ -504,8 +625,9 @@ function mergePeople(currentPeople: Person[], incomingPeople: Person[]) {
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function bumpPhotoCounts(
+function adjustPhotoCounts(
   photos: PhotoAsset[],
+  direction: 1 | -1,
   setPeople: Dispatch<SetStateAction<Person[]>>,
 ) {
   const counts = new Map<string, number>();
@@ -518,7 +640,10 @@ function bumpPhotoCounts(
   setPeople((current) =>
     current.map((person) => ({
       ...person,
-      photoCount: person.photoCount + (counts.get(person.id) ?? 0),
+      photoCount: Math.max(
+        0,
+        person.photoCount + direction * (counts.get(person.id) ?? 0),
+      ),
     })),
   );
 }

@@ -21,13 +21,13 @@ flowchart LR
   pages -->|"Authorization Code + PKCE"| cognito
   cognito -->|"ID token"| pages
   user -->|"Drag/drop images"| pages
-  pages -->|"Bearer JWT<br/>GET /library<br/>POST /uploads/presign<br/>POST /uploads/process"| api
+  pages -->|"Bearer JWT<br/>GET /library<br/>POST /uploads/*<br/>DELETE /photos/*<br/>DELETE /people/*"| api
   api --> lambda
   pages -->|"Presigned PUT image upload"| s3
-  lambda -->|"Owner-scoped PUT/GET keys<br/>HeadObject verification"| s3
+  lambda -->|"Owner-scoped PUT/GET/DELETE keys<br/>HeadObject verification"| s3
   api -->|"Validates issuer + audience"| cognito
-  lambda -->|"Index reference faces<br/>Compare uploaded photos"| rekognition
-  lambda -->|"Persist upload sessions<br/>people/photos/matches"| ddb
+  lambda -->|"Index, compare, delete faces"| rekognition
+  lambda -->|"Persist and delete upload sessions<br/>people/photos/matches"| ddb
   lambda --> logs
   api --> logs
   budget -.->|"Optional email alert"| user
@@ -50,8 +50,10 @@ flowchart LR
 13. Reference uploads are indexed with Rekognition `IndexFaces` and saved as people records.
 14. Photo uploads are compared against bounded reference images with Rekognition `CompareFaces`.
 15. Lambda writes owner-scoped photo and match metadata to DynamoDB and returns preview URLs and match states.
-16. Lambda emits structured request logs; API Gateway emits JSON access logs.
-17. CloudWatch alarms track Lambda errors, Lambda throttles, and API 5xx responses.
+16. For photo deletes, Lambda verifies ownership, removes the S3 object, deletes photo and match rows, and decrements affected people counters.
+17. For person deletes, Lambda verifies ownership, removes reference S3 objects, deletes Rekognition face IDs, deletes related match rows, and decrements affected photo counters.
+18. Lambda emits structured request logs; API Gateway emits JSON access logs.
+19. CloudWatch alarms track Lambda errors, Lambda throttles, and API 5xx responses.
 
 ## Deployment Shape
 
@@ -66,6 +68,8 @@ flowchart LR
 - The hosted demo can operate without AWS by using mock data.
 - AWS API routes require a Cognito JWT when deployed from Terraform.
 - The application scopes records by Cognito `sub`, but it does not include a full account-management or retention workflow.
+- Uploaded photos can be deleted individually; reference images are currently managed by deleting the person/reference record.
+- Delete flows clean up S3 objects and DynamoDB metadata, but they are not wrapped in a multi-service transaction.
 - Upload session records are short-lived and protected by DynamoDB TTL, but TTL cleanup is eventually consistent.
 - CloudWatch alarms are lightweight and low-volume oriented; incident response is limited to optional email notifications.
 - The frontend stores short-lived tokens in session storage and does not currently perform silent refresh.

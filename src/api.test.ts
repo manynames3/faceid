@@ -81,6 +81,36 @@ describe("submitUpload", () => {
   });
 });
 
+describe("delete requests", () => {
+  it("sends authenticated delete requests for photos and people", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { deletePerson, deletePhoto } = await import("./api");
+
+    await deletePhoto("photo 1", authSession);
+    await deletePerson("person/1", authSession);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/photos/photo%201",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      headers: { Authorization: "Bearer id-token" },
+      method: "DELETE",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "https://api.example.test/people/person%2F1",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      headers: { Authorization: "Bearer id-token" },
+      method: "DELETE",
+    });
+  });
+});
+
 function jsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), {
     headers: { "Content-Type": "application/json" },

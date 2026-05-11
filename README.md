@@ -28,6 +28,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - Dual runtime mode: mock data for local/frontend review, real AWS API mode when `VITE_API_BASE_URL` is set.
 - Cognito sign-in with API Gateway JWT authorization and owner-scoped S3/DynamoDB records.
 - DynamoDB-backed upload sessions that verify issued S3 keys, object size, content type, and upload metadata before processing.
+- Owner-scoped delete flows for removing uploaded photos and reference/person records from S3, DynamoDB, and Rekognition.
 - Focused frontend and backend tests for API upload contracts, auth context, and upload validation.
 - GitHub Actions CI for linting, tests, frontend build, Lambda syntax, and Terraform validation.
 - Structured Lambda logs, API Gateway access logs, CloudWatch alarms, and optional AWS Budget alerts.
@@ -117,6 +118,7 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 - Cognito protects API routes with JWT authorization.
 - Lambda scopes S3 keys and DynamoDB reads/writes to the authenticated Cognito user.
 - Upload processing requires a valid upload session and verifies the S3 object before invoking Rekognition.
+- Users can remove their uploaded photos and reference/person records; deletes remove private S3 objects and related metadata.
 - Upload sessions are marked `processed` or `failed` so partial processing failures are visible in backend state.
 - The public Cloudflare demo is connected to AWS with conservative API throttles and upload limits.
 - `force_destroy_bucket` defaults to `true` in Terraform so teardown removes uploaded assets.
@@ -126,6 +128,7 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 - The MVP backend uses bounded `CompareFaces` checks against stored reference images; this is simple and deployable, but cost grows with `photos * people * references`.
 - The current Lambda does not crop every face in group photos before searching. Large group-photo support would require a deeper face-detection/cropping pipeline.
 - No moderation, consent-management, admin review, or retention workflow is included.
+- Reference images are managed at the person level in the current UI rather than as individually editable reference assets.
 - The current frontend does not refresh Cognito tokens in place; users sign in again after the token expires.
 - CI validates infrastructure and app code, but deployment is still intentionally manual.
 - The Cloudflare Pages deployment is static; backend environment wiring happens through `VITE_API_BASE_URL`, `VITE_AUTH_CLIENT_ID`, and `VITE_AUTH_DOMAIN`.

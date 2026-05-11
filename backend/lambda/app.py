@@ -6,6 +6,7 @@ import time
 import uuid
 from decimal import Decimal
 from typing import Any
+from urllib.parse import unquote
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -62,10 +63,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 result = response(200, presign_uploads(read_json(event), user_id), event)
             elif method == "POST" and path == "/uploads/process":
                 result = response(200, process_uploads(read_json(event), user_id), event)
+            elif method == "DELETE" and path.startswith("/photos/"):
+                result = response(
+                    200,
+                    delete_photo(extract_path_id(path, "/photos/"), user_id),
+                    event,
+                )
+            elif method == "DELETE" and path.startswith("/people/"):
+                result = response(
+                    200,
+                    delete_person(extract_path_id(path, "/people/"), user_id),
+                    event,
+                )
             else:
                 result = response(404, {"message": "Route not found"}, event)
     except PermissionError as error:
         result = response(401, {"message": str(error)}, event)
+    except LookupError as error:
+        result = response(404, {"message": str(error)}, event)
     except ValueError as error:
         result = response(400, {"message": str(error)}, event)
     except ClientError as error:
@@ -358,6 +373,73 @@ def get_library(user_id: str) -> dict[str, Any]:
     }
 
 
+def delete_photo(photo_id: str, user_id: str) -> dict[str, Any]:
+    photo = get_owned_item(photos_table, {"id": photo_id}, user_id, "Photo")
+    matches = query_all_items(
+        matches_table,
+        KeyConditionExpression=Key("photo_id").eq(photo_id),
+    )
+
+    delete_s3_object(photo["key"])
+    deleted_matches = 0
+
+    for match in matches:
+        if match.get("owner_id") != user_id:
+            continue
+        matches_table.delete_item(
+            Key={"photo_id": photo_id, "person_id": match["person_id"]}
+        )
+        decrement_person_photo_count(match["person_id"])
+        deleted_matches += 1
+
+    photos_table.delete_item(
+        Key={"id": photo_id},
+        ConditionExpression="owner_id = :owner_id",
+        ExpressionAttributeValues={":owner_id": user_id},
+    )
+
+    return {"deletedPhotoId": photo_id, "deletedMatches": deleted_matches}
+
+
+def delete_person(person_id: str, user_id: str) -> dict[str, Any]:
+    person = get_owned_item(people_table, {"id": person_id}, user_id, "Person")
+    face_ids = [face_id for face_id in person.get("face_ids", []) if face_id]
+    reference_keys = [key for key in person.get("reference_keys", []) if key]
+    matches = query_all_items(
+        matches_table,
+        IndexName="person_id-photo_id-index",
+        KeyConditionExpression=Key("person_id").eq(person_id),
+    )
+
+    if face_ids:
+        rekognition.delete_faces(CollectionId=COLLECTION_ID, FaceIds=face_ids)
+
+    for key in reference_keys:
+        delete_s3_object(key)
+
+    deleted_matches = 0
+    for match in matches:
+        if match.get("owner_id") != user_id:
+            continue
+        matches_table.delete_item(
+            Key={"photo_id": match["photo_id"], "person_id": person_id}
+        )
+        decrement_photo_match_count(match["photo_id"])
+        deleted_matches += 1
+
+    people_table.delete_item(
+        Key={"id": person_id},
+        ConditionExpression="owner_id = :owner_id",
+        ExpressionAttributeValues={":owner_id": user_id},
+    )
+
+    return {
+        "deletedPersonId": person_id,
+        "deletedMatches": deleted_matches,
+        "deletedReferenceImages": len(reference_keys),
+    }
+
+
 def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item["id"],
@@ -433,6 +515,13 @@ def read_json(event: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def extract_path_id(path: str, prefix: str) -> str:
+    value = unquote(path.removeprefix(prefix)).strip("/")
+    if not value or "/" in value:
+        raise ValueError("Invalid resource identifier.")
+    return value
+
+
 def get_request_user_id(event: dict[str, Any]) -> str:
     claims = (
         event.get("requestContext", {})
@@ -467,6 +556,50 @@ def query_owner_items(
         items.extend(response.get("Items", []))
 
     return items
+
+
+def query_all_items(table: Any, **query_kwargs: Any) -> list[dict[str, Any]]:
+    items = []
+    response = table.query(**query_kwargs)
+    items.extend(response.get("Items", []))
+
+    while "LastEvaluatedKey" in response:
+        response = table.query(
+            **query_kwargs,
+            ExclusiveStartKey=response["LastEvaluatedKey"],
+        )
+        items.extend(response.get("Items", []))
+
+    return items
+
+
+def get_owned_item(
+    table: Any, key: dict[str, str], user_id: str, label: str
+) -> dict[str, Any]:
+    item = table.get_item(Key=key).get("Item")
+    if not item or item.get("owner_id") != user_id:
+        raise LookupError(f"{label} was not found.")
+    return item
+
+
+def delete_s3_object(key: str) -> None:
+    s3.delete_object(Bucket=BUCKET_NAME, Key=key)
+
+
+def decrement_person_photo_count(person_id: str) -> None:
+    people_table.update_item(
+        Key={"id": person_id},
+        UpdateExpression="SET updated_at = :now ADD photo_count :minus_one",
+        ExpressionAttributeValues={":minus_one": -1, ":now": iso_now()},
+    )
+
+
+def decrement_photo_match_count(photo_id: str) -> None:
+    photos_table.update_item(
+        Key={"id": photo_id},
+        UpdateExpression="ADD match_count :minus_one",
+        ExpressionAttributeValues={":minus_one": -1},
+    )
 
 
 def validate_upload_session(
@@ -618,7 +751,7 @@ def cors_headers(event: dict[str, Any]) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": allow_origin,
         "Access-Control-Allow-Headers": "content-type,authorization",
-        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Methods": "DELETE,GET,POST,OPTIONS",
         "Content-Type": "application/json",
     }
 

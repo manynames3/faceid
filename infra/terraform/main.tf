@@ -315,6 +315,7 @@ resource "aws_iam_role_policy" "lambda" {
         Action = [
           "dynamodb:BatchGetItem",
           "dynamodb:BatchWriteItem",
+          "dynamodb:DeleteItem",
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
@@ -335,6 +336,7 @@ resource "aws_iam_role_policy" "lambda" {
         Effect = "Allow"
         Action = [
           "rekognition:CompareFaces",
+          "rekognition:DeleteFaces",
           "rekognition:IndexFaces"
         ]
         Resource = "*"
@@ -508,7 +510,7 @@ resource "aws_apigatewayv2_api" "http" {
 
   cors_configuration {
     allow_headers = ["content-type", "authorization"]
-    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_methods = ["DELETE", "GET", "POST", "OPTIONS"]
     allow_origins = var.allowed_origins
     max_age       = 300
   }
@@ -554,6 +556,22 @@ resource "aws_apigatewayv2_route" "presign" {
 resource "aws_apigatewayv2_route" "process" {
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = "POST /uploads/process"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "delete_photo" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "DELETE /photos/{photo_id}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "delete_person" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "DELETE /people/{person_id}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
