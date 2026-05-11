@@ -334,6 +334,7 @@ button {
 }
 
 .brand-row h1,
+.event-card h2,
 .topbar h2 {
   margin: 0;
   color: var(--ink);
@@ -346,11 +347,13 @@ button {
 }
 
 .brand-row span,
+.event-meta,
 .eyebrow,
 .section-title,
 .photo-title-row span,
 .person-copy small,
 .upload-zone small,
+.topbar-subtitle,
 .metric span {
   color: var(--muted);
 }
@@ -358,8 +361,40 @@ button {
 .brand-row span,
 .person-copy small,
 .upload-zone small,
+.topbar-subtitle,
 .metric span {
   font-size: 0.82rem;
+}
+
+.event-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.event-card .eyebrow {
+  margin: 0;
+}
+
+.event-card h2 {
+  font-size: 1.1rem;
+}
+
+.event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.event-meta span {
+  border-radius: 999px;
+  background: var(--surface-2);
+  padding: 5px 8px;
 }
 
 .person-nav,
@@ -516,6 +551,11 @@ button {
 
 .topbar h2 {
   font-size: clamp(2rem, 4vw, 3.8rem);
+}
+
+.topbar-subtitle {
+  max-width: 48rem;
+  margin: 8px 0 0;
 }
 
 .search-box {
@@ -681,6 +721,49 @@ button {
   line-height: 1;
 }
 
+.delivery-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.delivery-status {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 62px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.delivery-status svg {
+  grid-row: 1 / span 2;
+  color: var(--accent);
+}
+
+.delivery-status span {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.delivery-status strong {
+  min-width: 0;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+}
+
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -837,6 +920,10 @@ button {
   .pipeline {
     grid-column: 1 / -1;
   }
+
+  .delivery-strip {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 700px) {
@@ -894,6 +981,7 @@ button {
 
   .upload-strip,
   .stats-grid,
+  .delivery-strip,
   .pipeline {
     grid-template-columns: 1fr;
   }

@@ -32,6 +32,7 @@ import type { Person, PhotoAsset, UploadMode } from "./types";
 
 const allPeopleId = "all";
 const reviewId = "review";
+const eventWorkspaceName = "Current Event";
 
 function App() {
   const [people, setPeople] = useState<Person[]>(hasConfiguredApi ? [] : initialPeople);
@@ -195,8 +196,8 @@ function App() {
 
       setNotice(
         mode === "references"
-          ? `${result.people.length} reference face${result.people.length === 1 ? "" : "s"} added.`
-          : `${result.photos.length} photo${result.photos.length === 1 ? "" : "s"} queued and matched.`,
+          ? `${result.people.length} guest profile${result.people.length === 1 ? "" : "s"} ready for matching.`
+          : `${result.photos.length} event photo${result.photos.length === 1 ? "" : "s"} matched into galleries.`,
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Upload failed.");
@@ -294,13 +295,13 @@ function App() {
               <div className="brand-mark">
                 <UsersRound size={22} aria-hidden="true" />
               </div>
-              <span>Face Sorter</span>
+              <span>FaceID Events</span>
             </div>
-            <p className="eyebrow">Private photo library</p>
-            <h1>Sort photos by person.</h1>
+            <p className="eyebrow">Private event galleries</p>
+            <h1>Deliver face-sorted galleries after every event.</h1>
             <p className="auth-copy">
-              Upload reference faces, match event photos, and manage stored images in
-              one private workspace.
+              Give photographers and event teams a private workspace for guest
+              references, event photos, review queues, and owner-controlled deletes.
             </p>
             <div className="auth-actions">
               <button
@@ -329,7 +330,7 @@ function App() {
             <div className="auth-trust-row" aria-label="Security and storage">
               <span>
                 <ShieldCheck size={15} aria-hidden="true" />
-                Cognito auth
+                Guest references
               </span>
               <span>
                 <Cloud size={15} aria-hidden="true" />
@@ -353,17 +354,17 @@ function App() {
           </div>
           <div className="auth-preview" aria-hidden="true">
             <div className="preview-toolbar">
-              <span>Photo Library</span>
-              <strong>3 recent</strong>
+              <span>Spring Gala</span>
+              <strong>Private</strong>
             </div>
             <div className="preview-upload-row">
               <div>
                 <UserRoundPlus size={18} />
-                <span>Reference Faces</span>
+                <span>Guest references</span>
               </div>
               <div>
                 <ImagePlus size={18} />
-                <span>New Photos</span>
+                <span>Event photos</span>
               </div>
             </div>
             <div className="preview-photo-grid">
@@ -393,12 +394,22 @@ function App() {
             <UsersRound size={22} aria-hidden="true" />
           </div>
           <div>
-            <h1>Face Sorter</h1>
+            <h1>FaceID Events</h1>
             <span>
-              {authSession?.email ?? (hasConfiguredApi ? "API connected" : "Local preview")}
+              {authSession?.email ??
+                (hasConfiguredApi ? "Private workspace" : "Local event preview")}
             </span>
           </div>
         </div>
+
+        <section className="event-card" aria-label="Event workspace">
+          <p className="eyebrow">Event workspace</p>
+          <h2>{eventWorkspaceName}</h2>
+          <div className="event-meta">
+            <span>Private gallery</span>
+            <span>Owner managed</span>
+          </div>
+        </section>
 
         <nav className="person-nav" aria-label="Photo filters">
           <button
@@ -407,7 +418,7 @@ function App() {
             onClick={() => setActivePersonId(allPeopleId)}
           >
             <Images size={18} aria-hidden="true" />
-            <span>All Photos</span>
+            <span>Event Photos</span>
             <strong>{photos.length}</strong>
           </button>
           <button
@@ -416,14 +427,14 @@ function App() {
             onClick={() => setActivePersonId(reviewId)}
           >
             <ShieldCheck size={18} aria-hidden="true" />
-            <span>Needs Review</span>
+            <span>Review Queue</span>
             <strong>{reviewCount}</strong>
           </button>
         </nav>
 
         <div className="side-section">
           <div className="section-title">
-            <span>People</span>
+            <span>Guest Galleries</span>
             <strong>{people.length}</strong>
           </div>
           <div className="people-list">
@@ -440,7 +451,7 @@ function App() {
                   <span className="avatar">{person.initials}</span>
                   <span className="person-copy">
                     <span>{person.name}</span>
-                    <small>{person.photoCount} photos</small>
+                    <small>{person.photoCount} matched photos</small>
                   </span>
                 </button>
                 <button
@@ -466,14 +477,21 @@ function App() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Serverless photo workflow</p>
+            <p className="eyebrow">Private event gallery</p>
             <h2>
               {selectedPerson
-                ? selectedPerson.name
+                ? `${selectedPerson.name}'s Gallery`
                 : activePersonId === reviewId
-                  ? "Review Matches"
-                  : "Photo Library"}
+                  ? "Review Queue"
+                  : eventWorkspaceName}
             </h2>
+            <p className="topbar-subtitle">
+              {selectedPerson
+                ? "Photos matched to this guest stay private in the owner's workspace."
+                : activePersonId === reviewId
+                  ? "Low-confidence matches are grouped here before delivery."
+                  : "Upload guest references and event photos into one owner-managed gallery."}
+            </p>
           </div>
           <div className="topbar-actions">
             <label className="search-box">
@@ -498,22 +516,24 @@ function App() {
           <UploadZone
             disabled={isUploading}
             icon={<UserRoundPlus size={22} aria-hidden="true" />}
-            label="Reference Faces"
+            helper="named files"
+            label="Guest References"
             mode="references"
             onFiles={handleFiles}
           />
           <UploadZone
             disabled={isUploading}
             icon={<ImagePlus size={22} aria-hidden="true" />}
-            label="New Photos"
+            helper="match into galleries"
+            label="Event Photos"
             mode="photos"
             onFiles={handleFiles}
           />
           <div className="pipeline">
-            <PipelineStep icon={<Cloud size={17} />} label="S3" />
-            <PipelineStep icon={<Search size={17} />} label="Rekognition" />
-            <PipelineStep icon={<Database size={17} />} label="DynamoDB" />
-            <PipelineStep icon={<FolderOpen size={17} />} label="People" />
+            <PipelineStep icon={<Cloud size={17} />} label="Private S3" />
+            <PipelineStep icon={<Search size={17} />} label="Face Match" />
+            <PipelineStep icon={<Database size={17} />} label="Metadata" />
+            <PipelineStep icon={<FolderOpen size={17} />} label="Galleries" />
           </div>
         </section>
 
@@ -525,10 +545,28 @@ function App() {
         )}
 
         <section className="stats-grid" aria-label="Library metrics">
-          <Metric label="People" value={people.length.toString()} />
-          <Metric label="Photos" value={photos.length.toString()} />
+          <Metric label="Guests" value={people.length.toString()} />
+          <Metric label="Event Photos" value={photos.length.toString()} />
           <Metric label="Matches" value={countMatches(photos).toString()} />
           <Metric label="Review" value={reviewCount.toString()} tone="warning" />
+        </section>
+
+        <section className="delivery-strip" aria-label="Event delivery status">
+          <DeliveryStatus
+            icon={<UserRoundPlus size={17} />}
+            label="Guest intake"
+            value={`${people.length} profiles`}
+          />
+          <DeliveryStatus
+            icon={<ShieldCheck size={17} />}
+            label="Review queue"
+            value={`${reviewCount} photos`}
+          />
+          <DeliveryStatus
+            icon={<Trash2 size={17} />}
+            label="Data control"
+            value="Delete enabled"
+          />
         </section>
 
         <PhotoGrid
@@ -543,13 +581,21 @@ function App() {
 
 type UploadZoneProps = {
   disabled: boolean;
+  helper: string;
   icon: ReactNode;
   label: string;
   mode: UploadMode;
   onFiles: (mode: UploadMode, files: File[]) => void;
 };
 
-function UploadZone({ disabled, icon, label, mode, onFiles }: UploadZoneProps) {
+function UploadZone({
+  disabled,
+  helper,
+  icon,
+  label,
+  mode,
+  onFiles,
+}: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   function submitFiles(fileList: FileList | null) {
@@ -586,7 +632,7 @@ function UploadZone({ disabled, icon, label, mode, onFiles }: UploadZoneProps) {
       />
       <span className="upload-icon">{icon}</span>
       <span>{label}</span>
-      <small>{mode === "references" ? "filename names" : "face matching"}</small>
+      <small>{helper}</small>
       {disabled && <Loader2 className="spin" size={18} aria-hidden="true" />}
     </label>
   );
@@ -618,6 +664,24 @@ function Metric({
   );
 }
 
+function DeliveryStatus({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="delivery-status">
+      {icon}
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function PhotoGrid({
   deletingPhotoIds,
   onDeletePhoto,
@@ -631,13 +695,13 @@ function PhotoGrid({
     return (
       <div className="empty-state">
         <UploadCloud size={30} aria-hidden="true" />
-        <span>No photos in this view.</span>
+        <span>No event photos in this view.</span>
       </div>
     );
   }
 
   return (
-    <section className="photo-grid" aria-label="Matched photos">
+    <section className="photo-grid" aria-label="Event gallery photos">
       {photos.map((photo) => (
         <article className="photo-card" key={photo.id}>
           <div className="photo-media">

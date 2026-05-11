@@ -27,7 +27,7 @@ export const initialPeople: Person[] = [
 export const initialPhotos: PhotoAsset[] = [
   {
     id: "photo-001",
-    name: "reception-041.jpg",
+    name: "guest-arrivals-041.jpg",
     size: 2_412_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
     previewUrl:
@@ -49,7 +49,7 @@ export const initialPhotos: PhotoAsset[] = [
   },
   {
     id: "photo-002",
-    name: "dance-floor-118.jpg",
+    name: "speaker-portraits-118.jpg",
     size: 3_810_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 33).toISOString(),
     previewUrl:
@@ -65,7 +65,7 @@ export const initialPhotos: PhotoAsset[] = [
   },
   {
     id: "photo-003",
-    name: "table-portraits-022.jpg",
+    name: "reception-portraits-022.jpg",
     size: 1_921_000,
     uploadedAt: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
     previewUrl:

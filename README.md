@@ -1,6 +1,6 @@
 # FaceID
 
-FaceID is a serverless photo-sorting web app that groups uploaded photos by recognizable people. The React frontend lets users drag in named reference photos, upload later event photos, review confidence scores, and browse each person's matched images. The production architecture is designed around Cloudflare Pages for the static app and a Cognito-authenticated AWS serverless backend for private storage, Rekognition-based face comparison, and DynamoDB metadata.
+FaceID is a serverless private event-gallery app for photographers and event teams that groups uploaded event photos by recognizable guests. The React frontend supports guest reference intake, event photo uploads, confidence review, per-person galleries, and owner-controlled deletion. The production architecture is designed around Cloudflare Pages for the static app and a Cognito-authenticated AWS serverless backend for private storage, Rekognition-based face comparison, and DynamoDB metadata.
 
 **Live demo:** [https://faceid-8dc.pages.dev](https://faceid-8dc.pages.dev)
 
@@ -8,7 +8,7 @@ The hosted demo is connected to the Terraform-managed AWS backend. The app still
 
 ## About
 
-This project demonstrates a pragmatic path from an interactive frontend prototype to a deployable serverless image-processing system. The UI is usable without a backend for review/demo purposes, while the AWS backend is defined in Terraform so the infrastructure can be created and destroyed repeatably.
+This project demonstrates a pragmatic path from an interactive frontend prototype to a deployable serverless image-processing system for private event photo delivery. The UI is usable without a backend for review/demo purposes, while the AWS backend is defined in Terraform so the infrastructure can be created and destroyed repeatably.
 
 ## Tech Stack
 
@@ -29,6 +29,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - Cognito sign-in with API Gateway JWT authorization and owner-scoped S3/DynamoDB records.
 - DynamoDB-backed upload sessions that verify issued S3 keys, object size, content type, and upload metadata before processing.
 - Owner-scoped delete flows for removing uploaded photos and reference/person records from S3, DynamoDB, and Rekognition.
+- Event-gallery UX focused on guest reference intake, event photo upload, review queue triage, and per-person galleries.
 - Focused frontend and backend tests for API upload contracts, auth context, and upload validation.
 - GitHub Actions CI for linting, tests, frontend build, Lambda syntax, and Terraform validation.
 - Structured Lambda logs, API Gateway access logs, CloudWatch alarms, and optional AWS Budget alerts.
