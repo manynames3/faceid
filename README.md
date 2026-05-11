@@ -34,6 +34,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 - GitHub Actions CI for linting, tests, frontend build, Lambda syntax, and Terraform validation.
 - Structured Lambda logs, API Gateway access logs, CloudWatch alarms, and optional AWS Budget alerts.
 - Reference-photo naming flow that derives people from filenames such as `jane-smith.jpg`.
+- Matching-quality guidance for adding multiple guest references when side angles, candid photos, or poor lighting are expected.
 - Private photo storage with short-lived signed preview URLs rather than public S3 objects.
 - Explicit low-volume cost controls: max files per batch, upload size limits, bounded people/reference comparisons, API throttling, and short CloudWatch log retention.
 - Terraform-managed backend resources with `terraform destroy` support for cleanup.
@@ -45,6 +46,7 @@ The system is documented in:
 
 - [Architecture Overview](docs/architecture.md)
 - [Backend API Contract](docs/backend-api.md)
+- [Responsible Use And Matching Quality](docs/responsible-use.md)
 - [Architecture Decision Records](docs/adrs/README.md)
 - [Terraform Deployment Notes](infra/terraform/README.md)
 
@@ -120,6 +122,7 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 - Lambda scopes S3 keys and DynamoDB reads/writes to the authenticated Cognito user.
 - Upload processing requires a valid upload session and verifies the S3 object before invoking Rekognition.
 - Users can remove their uploaded photos and reference/person records; deletes remove private S3 objects and related metadata.
+- Face matching is probabilistic; review lower-confidence matches before using a gallery outside personal photo organization.
 - Upload sessions are marked `processed` or `failed` so partial processing failures are visible in backend state.
 - The public Cloudflare demo is connected to AWS with conservative API throttles and upload limits.
 - `force_destroy_bucket` defaults to `true` in Terraform so teardown removes uploaded assets.
@@ -127,8 +130,10 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 ## Limitations
 
 - The MVP backend uses bounded `CompareFaces` checks against stored reference images; this is simple and deployable, but cost grows with `photos * people * references`.
+- Different face angles and poor image quality can reduce match confidence; add more guest reference photos and use the review queue for use cases where this matters.
 - The current Lambda does not crop every face in group photos before searching. Large group-photo support would require a deeper face-detection/cropping pipeline.
-- No moderation, consent-management, admin review, or retention workflow is included.
+- No moderation, consent-management, invite-link, share-link, admin review, or retention workflow is included.
+- Correctional surveillance, public-space tracking, inmate tracking, and other law-enforcement identification workflows are explicitly non-target use cases for this project.
 - Reference images are managed at the person level in the current UI rather than as individually editable reference assets.
 - The current frontend does not refresh Cognito tokens in place; users sign in again after the token expires.
 - CI validates infrastructure and app code, but deployment is still intentionally manual.

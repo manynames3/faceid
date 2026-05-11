@@ -31,6 +31,8 @@ Server flow:
 
 Reference images are currently managed through the person record. Deleting a person removes their stored reference image keys, Rekognition face IDs, and related matches.
 
+For events where guests may appear from different angles, upload multiple reference images for the same guest. A practical set is one front-facing image, one slight side angle, and one candid or event-like image. The backend caps the number of compared reference keys per person with `MAX_REFS_PER_PERSON`; raising it can improve recall for angle variation but also increases Rekognition calls.
+
 ## Photo Uploads
 
 Server flow:
@@ -181,3 +183,5 @@ Start with:
 - `unknown`: below 75%
 
 Tune thresholds with real photos before turning on bulk sorting.
+
+Face matching is probabilistic. Treat `review` as a normal workflow state when references are limited, guests are photographed from side angles, or event images include blur, low light, hats, glasses, or partial faces.

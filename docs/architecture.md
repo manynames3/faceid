@@ -75,5 +75,7 @@ flowchart LR
 - The frontend stores short-lived tokens in session storage and does not currently perform silent refresh.
 - Uploads are capped by Lambda-configured file count and file size guardrails.
 - Matching cost grows with `uploaded photos * compared people * reference images per person`.
+- More reference images per guest can improve matching across side angles and candid shots, but increases Rekognition comparison calls.
 - The current MVP does not crop every detected face in group photos before matching.
 - S3 objects remain private; browser access uses short-lived signed URLs.
+- Public-space tracking, correctional surveillance, inmate tracking, and automated law-enforcement identification are non-target use cases for this architecture.
