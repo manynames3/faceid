@@ -117,6 +117,14 @@ export async function completeSignInFromUrl(): Promise<AuthSession | null> {
 }
 
 export async function startSignIn() {
+  await startHostedAuth("oauth2/authorize");
+}
+
+export async function startSignUp() {
+  await startHostedAuth("signup");
+}
+
+async function startHostedAuth(path: "oauth2/authorize" | "signup") {
   if (!hasConfiguredAuth || !authDomain || !authClientId) {
     throw new Error("Authentication is not configured.");
   }
@@ -138,7 +146,7 @@ export async function startSignIn() {
     state,
   });
 
-  window.location.assign(`${authDomain}/oauth2/authorize?${params.toString()}`);
+  window.location.assign(`${authDomain}/${path}?${params.toString()}`);
 }
 
 export function signOut() {

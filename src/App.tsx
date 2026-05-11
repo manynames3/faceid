@@ -24,6 +24,7 @@ import {
   hasConfiguredAuth,
   signOut,
   startSignIn,
+  startSignUp,
   type AuthSession,
 } from "./auth";
 import { initialPeople, initialPhotos } from "./mockData";
@@ -278,39 +279,107 @@ function App() {
     });
   }
 
+  function handleSignUp() {
+    void startSignUp().catch((error: unknown) => {
+      setNotice(error instanceof Error ? error.message : "Sign-up failed.");
+    });
+  }
+
   if (hasConfiguredApi && hasConfiguredAuth && (isAuthLoading || !authSession)) {
     return (
       <main className="auth-shell">
-        <section className="auth-panel" aria-label="Sign in">
-          <div className="brand-mark">
-            <UsersRound size={22} aria-hidden="true" />
-          </div>
-          <p className="eyebrow">Private photo library</p>
-          <h1>Face Sorter</h1>
-          <p>Sign in with Cognito to upload reference faces and view your photo matches.</p>
-          <button
-            className="primary-action"
-            disabled={isAuthLoading}
-            onClick={handleSignIn}
-            type="button"
-          >
-            {isAuthLoading ? (
-              <Loader2 className="spin" size={18} aria-hidden="true" />
-            ) : (
-              <LogIn size={18} aria-hidden="true" />
-            )}
-            <span>{isAuthLoading ? "Checking sign-in" : "Sign in"}</span>
-          </button>
-          {notice && (
-            <div className="notice auth-notice" role="status">
-              {isAuthLoading ? (
-                <Loader2 size={18} className="spin" />
-              ) : (
-                <ShieldCheck size={18} />
-              )}
-              <span>{notice}</span>
+        <section className="auth-layout" aria-label="Sign in or create account">
+          <div className="auth-panel">
+            <div className="auth-brand-row">
+              <div className="brand-mark">
+                <UsersRound size={22} aria-hidden="true" />
+              </div>
+              <span>Face Sorter</span>
             </div>
-          )}
+            <p className="eyebrow">Private photo library</p>
+            <h1>Sort photos by person.</h1>
+            <p className="auth-copy">
+              Upload reference faces, match event photos, and manage stored images in
+              one private workspace.
+            </p>
+            <div className="auth-actions">
+              <button
+                className="primary-action"
+                disabled={isAuthLoading}
+                onClick={handleSignIn}
+                type="button"
+              >
+                {isAuthLoading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <LogIn size={18} aria-hidden="true" />
+                )}
+                <span>{isAuthLoading ? "Checking sign-in" : "Sign in"}</span>
+              </button>
+              <button
+                className="secondary-action"
+                disabled={isAuthLoading}
+                onClick={handleSignUp}
+                type="button"
+              >
+                <UserRoundPlus size={18} aria-hidden="true" />
+                <span>Create account</span>
+              </button>
+            </div>
+            <div className="auth-trust-row" aria-label="Security and storage">
+              <span>
+                <ShieldCheck size={15} aria-hidden="true" />
+                Cognito auth
+              </span>
+              <span>
+                <Cloud size={15} aria-hidden="true" />
+                Private S3
+              </span>
+              <span>
+                <Trash2 size={15} aria-hidden="true" />
+                Delete ready
+              </span>
+            </div>
+            {notice && (
+              <div className="notice auth-notice" role="status">
+                {isAuthLoading ? (
+                  <Loader2 size={18} className="spin" />
+                ) : (
+                  <ShieldCheck size={18} />
+                )}
+                <span>{notice}</span>
+              </div>
+            )}
+          </div>
+          <div className="auth-preview" aria-hidden="true">
+            <div className="preview-toolbar">
+              <span>Photo Library</span>
+              <strong>3 recent</strong>
+            </div>
+            <div className="preview-upload-row">
+              <div>
+                <UserRoundPlus size={18} />
+                <span>Reference Faces</span>
+              </div>
+              <div>
+                <ImagePlus size={18} />
+                <span>New Photos</span>
+              </div>
+            </div>
+            <div className="preview-photo-grid">
+              {initialPhotos.slice(0, 2).map((photo) => (
+                <div className="preview-photo" key={photo.id}>
+                  <img src={photo.previewUrl} alt="" />
+                  <span>{photo.matches[0]?.personName}</span>
+                </div>
+              ))}
+            </div>
+            <div className="preview-people-row">
+              {initialPeople.map((person) => (
+                <span key={person.id}>{person.initials}</span>
+              ))}
+            </div>
+          </div>
         </section>
       </main>
     );
