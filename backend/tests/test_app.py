@@ -79,6 +79,16 @@ class FakeTable:
         key = self.key_value(kwargs["Key"])
         item = self.items.setdefault(key, dict(kwargs["Key"]))
         values = kwargs.get("ExpressionAttributeValues") or {}
+        for field, parameter in {
+            "owner_id": ":owner_id", "event_id": ":event_id", "name": ":name",
+            "initials": ":initials", "consent_status": ":consent_status",
+            "consent_source": ":consent_source", "consent_captured_at": ":consent_captured_at",
+        }.items():
+            if parameter in values:
+                item[field] = values[parameter]
+        for field, parameter in {"reference_keys": ":keys", "face_ids": ":face_ids"}.items():
+            if parameter in values:
+                item[field] = item.get(field, []) + values[parameter]
         if ":status" in values:
             item["status"] = values[":status"]
         if ":reviewed_at" in values:
@@ -86,7 +96,7 @@ class FakeTable:
         if ":updated_at" in values:
             item["updated_at"] = values[":updated_at"]
         if ":one" in values:
-            if "reference_count" in item or "face_ids" in values:
+            if "reference_count" in item or ":face_ids" in values:
                 item["reference_count"] = int(item.get("reference_count") or 0) + int(
                     values[":one"]
                 )
@@ -436,6 +446,209 @@ class UploadIntegrityTests(unittest.TestCase):
         self.assertEqual(fake_s3.deleted[0]["Key"], "users/user-123/references/jane.jpg")
         self.assertEqual(app.matches_table.deletes[0]["Key"]["person_id"], "person-1")
         self.assertEqual(app.people_table.deletes[0]["Key"]["id"], "person-1")
+
+    def prepare_reference_request(self, guest_name="Jane McDonald", count=1, person_id=None):
+        payload = {
+            "files": [{"name": f"IMG_{index}.jpg", "size": 12, "type": "image/jpeg"} for index in range(count)],
+            "guestName": guest_name,
+            "mode": "references",
+        }
+        if person_id:
+            payload["personId"] = person_id
+        uploads = app.presign_uploads(payload, "user-123")["uploads"]
+        payload["files"] = []
+        for upload in uploads:
+            fake_s3.heads[upload["key"]] = {
+                "ContentLength": 12, "ContentType": "image/jpeg",
+                "Metadata": {"upload-id": upload["uploadId"]},
+            }
+            payload["files"].append({
+                "name": upload["name"], "key": upload["key"],
+                "uploadId": upload["uploadId"], "size": 12, "type": "image/jpeg",
+            })
+        payload["consent"] = {"confirmed": True, "source": "owner_attested"}
+        return payload
+
+    def test_named_references_preserve_name_and_return_one_authoritative_profile(self):
+        payload = self.prepare_reference_request("Jane McDonald", count=2)
+        result = app.process_uploads(payload, "user-123")
+
+        self.assertEqual(len(result["people"]), 1)
+        person = result["people"][0]
+        self.assertEqual(person["name"], "Jane McDonald")
+        self.assertEqual(person["referenceCount"], 2)
+        self.assertEqual(person["consentSource"], "owner_attested")
+        self.assertTrue(person["consentCapturedAt"])
+        self.assertIn(payload["files"][0]["key"], person["referencePreviewUrl"])
+
+    def test_same_name_submissions_are_distinct_people(self):
+        first = app.process_uploads(self.prepare_reference_request(), "user-123")
+        second = app.process_uploads(self.prepare_reference_request(), "user-123")
+        self.assertNotEqual(first["people"][0]["id"], second["people"][0]["id"])
+
+    def test_named_references_support_non_latin_names(self):
+        name = "\uc774 \uc9c0\uc6b0"
+        result = app.process_uploads(self.prepare_reference_request(name), "user-123")
+        self.assertEqual(result["people"][0]["name"], name)
+
+    def test_single_character_guest_name_is_supported(self):
+        name = "\u674e"
+        result = app.process_uploads(self.prepare_reference_request(name), "user-123")
+        self.assertEqual(result["people"][0]["name"], name)
+
+    def test_processing_cannot_change_guest_bound_to_upload_session(self):
+        payload = self.prepare_reference_request()
+        payload["guestName"] = "Another Guest"
+        with patch.object(fake_rekognition, "index_faces") as index_faces:
+            with self.assertRaisesRegex(ValueError, "issued upload session"):
+                app.process_uploads(payload, "user-123")
+            index_faces.assert_not_called()
+
+    def test_existing_guest_reference_cannot_cross_owner_or_event(self):
+        event_a = app.create_event({"name": "Event A"}, "user-123")
+        event_b = app.create_event({"name": "Event B"}, "user-123")
+        app.people_table.items["person-1"] = {
+            "id": "person-1", "owner_id": "another-user", "event_id": event_a["id"], "name": "Jane Doe",
+        }
+        payload = {"mode": "references", "eventId": event_a["id"], "personId": "person-1",
+                   "files": [{"name": "photo.jpg", "size": 12, "type": "image/jpeg"}]}
+        with self.assertRaisesRegex(LookupError, "Guest was not found"):
+            app.presign_uploads(payload, "user-123")
+        app.people_table.items["person-1"]["owner_id"] = "user-123"
+        payload["eventId"] = event_b["id"]
+        with self.assertRaisesRegex(ValueError, "selected event"):
+            app.presign_uploads(payload, "user-123")
+
+    def test_add_reference_updates_existing_guest_without_adding_cumulative_counts(self):
+        first = app.process_uploads(self.prepare_reference_request(), "user-123")["people"][0]
+        result = app.process_uploads(self.prepare_reference_request(person_id=first["id"]), "user-123")
+        self.assertEqual(result["people"][0]["id"], first["id"])
+        self.assertEqual(result["people"][0]["referenceCount"], 2)
+
+    def test_named_reference_limit_is_enforced_before_issuing_uploads(self):
+        with self.assertRaisesRegex(ValueError, "at most 2 reference"):
+            self.prepare_reference_request(count=3)
+        self.assertEqual(app.uploads_table.puts, [])
+
+    def test_deleted_guest_cannot_be_recreated_by_pending_reference_session(self):
+        first = app.process_uploads(self.prepare_reference_request(), "user-123")["people"][0]
+        payload = self.prepare_reference_request(person_id=first["id"])
+        app.people_table.items.pop(first["id"])
+        with patch.object(fake_rekognition, "index_faces") as index_faces:
+            with self.assertRaisesRegex(LookupError, "Guest was not found"):
+                app.process_uploads(payload, "user-123")
+            index_faces.assert_not_called()
+
+    def test_no_face_reference_reports_outcome_and_removes_unusable_image(self):
+        payload = self.prepare_reference_request()
+        with patch.object(fake_rekognition, "index_faces", return_value={"FaceRecords": []}):
+            result = app.process_uploads(payload, "user-123")
+        self.assertEqual(result["people"], [])
+        self.assertIn("No clear face found", result["warnings"][0])
+        self.assertEqual(fake_s3.deleted[0]["Key"], payload["files"][0]["key"])
+        self.assertEqual(app.people_table.items, {})
+
+    def test_unsupported_and_empty_files_are_rejected(self):
+        for image_type in ("image/heic", "image/webp", "application/octet-stream"):
+            with self.subTest(image_type=image_type):
+                with self.assertRaisesRegex(ValueError, "JPEG or PNG"):
+                    app.validate_files([{"name": "photo", "size": 12, "type": image_type}])
+        with self.assertRaisesRegex(ValueError, "empty"):
+            app.validate_files([{"name": "photo.jpg", "size": 0, "type": "image/jpeg"}])
+
+    def test_owner_cannot_record_guest_submitted_consent(self):
+        with self.assertRaisesRegex(ValueError, "owner-attested"):
+            app.validate_reference_consent({"confirmed": True, "source": "guest_submitted"})
+
+    def test_matching_does_not_silently_skip_guests_over_limit(self):
+        people = [{"id": f"person-{index}", "name": f"Guest {index}"} for index in range(app.MAX_COMPARE_PEOPLE + 1)]
+        with patch.object(app, "query_owner_event_items", return_value=people):
+            with patch.object(fake_rekognition, "compare_faces") as compare_faces:
+                with self.assertRaisesRegex(ValueError, "matching limit"):
+                    app.process_photo_files([], "user-123", "event-1")
+                compare_faces.assert_not_called()
+
+    def test_review_count_includes_all_unconfirmed_candidates(self):
+        photos = [{"matches": [{"status": status} for status in ("matched", "needs_review", "approved", "rejected")]}]
+        self.assertEqual(app.count_review_matches(photos), 2)
+
+    def prepare_guest_request(self, count=1):
+        secret = patch.object(app, "INTAKE_TOKEN_SECRET", "test-only-intake-secret")
+        secret.start()
+        self.addCleanup(secret.stop)
+        event = app.ensure_default_event("user-123")
+        payload = {"eventId": event["id"], "token": app.sign_intake_token(event["id"]),
+                   "guestName": "María Chen", "consent": {"confirmed": True, "source": "guest_submitted"},
+                   "files": [{"name": f"camera-{index}.jpg", "size": 12, "type": "image/jpeg"} for index in range(count)]}
+        uploads = app.presign_guest_references(payload)["uploads"]
+        payload["files"] = [{**file, "key": upload["key"], "uploadId": upload["uploadId"]}
+                            for file, upload in zip(payload["files"], uploads)]
+        for upload in uploads:
+            fake_s3.heads[upload["key"]] = {"ContentLength": 12, "ContentType": "image/jpeg",
+                                          "Metadata": {"upload-id": upload["uploadId"]}}
+        return payload
+
+    def test_guest_metadata_requires_event_capability_and_exposes_no_owner_data(self):
+        payload = self.prepare_guest_request()
+        self.assertEqual(app.get_guest_intake(payload), {"eventId": payload["eventId"], "eventName": "Default Event"})
+        for token in ("wrong", "0" * 64, "非" * 64):
+            with self.subTest(token=token):
+                with self.assertRaises(LookupError):
+                    app.get_guest_intake({**payload, "token": token})
+        with self.assertRaises(LookupError):
+            app.get_guest_intake({**payload, "eventId": "another-event"})
+
+    def test_guest_intake_link_is_owner_scoped_and_preserves_legacy_url(self):
+        payload = self.prepare_guest_request()
+        link = app.get_event_intake_link(payload["eventId"], "user-123", {})
+        self.assertIn("/guest?eventId=", link["intakeUrl"])
+        self.assertIn(payload["token"], link["intakeUrl"])
+        with self.assertRaises(LookupError):
+            app.get_event_intake_link(payload["eventId"], "another-owner", {})
+
+    def test_guest_signup_groups_references_and_records_guest_submitted_consent(self):
+        result = app.process_guest_references(self.prepare_guest_request(count=2))
+        self.assertEqual(len(result["people"]), 1)
+        self.assertEqual(result["people"][0]["name"], "María Chen")
+        self.assertEqual(result["people"][0]["referenceCount"], 2)
+        self.assertEqual(result["people"][0]["consentSource"], "guest_submitted")
+
+    def test_guest_signup_rejects_changed_names_and_owner_upload_sessions(self):
+        payload = self.prepare_guest_request()
+        with patch.object(fake_rekognition, "index_faces") as index_faces:
+            with self.assertRaisesRegex(ValueError, "guest signup"):
+                app.process_guest_references({**payload, "guestName": "Someone else"})
+            session = app.uploads_table.items[payload["files"][0]["uploadId"]]
+            session.pop("intake_source")
+            with self.assertRaisesRegex(ValueError, "guest signup"):
+                app.process_guest_references(payload)
+            index_faces.assert_not_called()
+
+    def test_guest_signup_accepts_sessions_issued_by_the_previous_deployment(self):
+        payload = self.prepare_guest_request(count=2)
+        for file in payload["files"]:
+            session = app.uploads_table.items[file["uploadId"]]
+            session.pop("person_id")
+            session.pop("intake_source")
+        result = app.process_guest_references(payload)
+        self.assertEqual(len(result["people"]), 1)
+        self.assertEqual(result["people"][0]["name"], payload["guestName"])
+        self.assertEqual(result["people"][0]["referenceCount"], 2)
+
+    def test_guest_signup_requires_its_own_consent_and_reference_mode(self):
+        payload = self.prepare_guest_request()
+        with self.assertRaisesRegex(ValueError, "guest-submitted"):
+            app.process_guest_references({**payload, "consent": {"confirmed": True, "source": "owner_attested"}})
+        session = app.uploads_table.items[payload["files"][0]["uploadId"]]
+        session["mode"] = "photos"
+        with self.assertRaisesRegex(ValueError, "requested file"):
+            app.process_guest_references(payload)
+
+    def test_guest_signup_cannot_exceed_the_reference_limit(self):
+        payload = self.prepare_guest_request()
+        files = [{"name": f"photo-{index}.jpg", "size": 12, "type": "image/jpeg"} for index in range(app.MAX_REFS_PER_PERSON + 1)]
+        with self.assertRaisesRegex(ValueError, "at most"):
+            app.presign_guest_references({**payload, "files": files})
 
 
 if __name__ == "__main__":

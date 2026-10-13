@@ -17,14 +17,20 @@ export type Person = {
   photoCount: number;
   initials: string;
   consentStatus?: "captured" | "unknown";
+  consentSource?: string;
+  consentCapturedAt?: string;
+  referencePreviewUrl?: string;
 };
 
 export type MatchStatus =
   | "matched"
+  | "suggested"
   | "needs_review"
   | "approved"
   | "rejected"
   | "unknown";
+
+export type DecisionStatus = Extract<MatchStatus, "approved" | "rejected">;
 
 export type PhotoMatch = {
   personId: string;
@@ -46,6 +52,7 @@ export type PhotoAsset = {
 export type UploadResult = {
   people: Person[];
   photos: PhotoAsset[];
+  warnings?: string[];
 };
 
 export type LibraryResult = UploadResult & {

@@ -1,97 +1,121 @@
 import type { EventWorkspace, Person, PhotoAsset } from "./types";
 
-export const initialEvents: EventWorkspace[] = [
-  {
-    id: "event-spring-gala",
-    name: "Spring Gala",
-    createdAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
-    status: "active",
-    guestCount: 3,
-    photoCount: 3,
-    reviewCount: 1,
+/** Local portraits, so the sample workspace never needs a network request. */
+export const samplePortraits = {
+  ava: {
+    alt: "Portrait of a woman with long brown hair in a striped shirt, outdoors at dusk",
+    src: "/images/sample-ava.jpg",
   },
-];
+  maya: {
+    alt: "Portrait of a laughing woman with dark wavy hair in a red top",
+    src: "/images/sample-maya.jpg",
+  },
+  noah: {
+    alt: "Portrait of a smiling man with dark hair in a grey sweater against a grey background",
+    src: "/images/sample-noah.jpg",
+  },
+};
 
-export const initialPeople: Person[] = [
-  {
-    id: "person-ava-morales",
-    name: "Ava Morales",
-    initials: "AM",
-    referenceCount: 3,
-    photoCount: 8,
-    consentStatus: "captured",
-  },
-  {
-    id: "person-noah-kim",
-    name: "Noah Kim",
-    initials: "NK",
-    referenceCount: 2,
-    photoCount: 5,
-    consentStatus: "captured",
-  },
-  {
-    id: "person-maya-johnson",
-    name: "Maya Johnson",
-    initials: "MJ",
-    referenceCount: 4,
-    photoCount: 11,
-    consentStatus: "captured",
-  },
-];
+export const sampleEventId = "event-sample-gala";
 
-export const initialPhotos: PhotoAsset[] = [
-  {
-    id: "photo-001",
-    name: "guest-arrivals-041.jpg",
-    size: 2_412_000,
-    uploadedAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
-    previewUrl:
-      "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&crop=faces&w=900&q=80",
-    matches: [
+export type SampleData = {
+  event: EventWorkspace;
+  people: Person[];
+  photos: PhotoAsset[];
+};
+
+/** Fresh copy each call so the demo can be reset without leaking edits. */
+export function createSampleData(): SampleData {
+  const now = Date.now();
+
+  return {
+    event: {
+      id: sampleEventId,
+      name: "Sample gala (simulated)",
+      createdAt: new Date(now - 1000 * 60 * 90).toISOString(),
+      status: "active",
+    },
+    people: [
       {
-        personId: "person-ava-morales",
-        personName: "Ava Morales",
-        confidence: 98.4,
-        status: "matched",
+        id: "person-sample-ava",
+        name: "Ava Morales",
+        initials: "AM",
+        referenceCount: 1,
+        photoCount: 1,
+        consentStatus: "captured",
+        consentSource: "owner_attested",
+        consentCapturedAt: new Date(now - 1000 * 60 * 80).toISOString(),
+        referencePreviewUrl: samplePortraits.ava.src,
       },
       {
-        personId: "person-noah-kim",
-        personName: "Noah Kim",
-        confidence: 91.7,
-        status: "matched",
+        id: "person-sample-maya",
+        name: "Maya Johnson",
+        initials: "MJ",
+        referenceCount: 1,
+        photoCount: 1,
+        consentStatus: "captured",
+        consentSource: "owner_attested",
+        consentCapturedAt: new Date(now - 1000 * 60 * 80).toISOString(),
+        referencePreviewUrl: samplePortraits.maya.src,
       },
-    ],
-  },
-  {
-    id: "photo-002",
-    name: "speaker-portraits-118.jpg",
-    size: 3_810_000,
-    uploadedAt: new Date(Date.now() - 1000 * 60 * 33).toISOString(),
-    previewUrl:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&crop=faces&w=900&q=80",
-    matches: [
       {
-        personId: "person-maya-johnson",
-        personName: "Maya Johnson",
-        confidence: 96.2,
-        status: "matched",
-      },
-    ],
-  },
-  {
-    id: "photo-003",
-    name: "reception-portraits-022.jpg",
-    size: 1_921_000,
-    uploadedAt: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
-    previewUrl:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&crop=faces&w=900&q=80",
-    matches: [
-      {
-        personId: "person-ava-morales",
-        personName: "Ava Morales",
-        confidence: 84.6,
-        status: "needs_review",
+        id: "person-sample-noah",
+        name: "Noah Kim",
+        initials: "NK",
+        referenceCount: 1,
+        photoCount: 1,
+        consentStatus: "captured",
+        consentSource: "owner_attested",
+        consentCapturedAt: new Date(now - 1000 * 60 * 80).toISOString(),
+        referencePreviewUrl: samplePortraits.noah.src,
       },
     ],
-  },
-];
+    photos: [
+      {
+        id: "photo-sample-garden",
+        name: "garden-0022.jpg",
+        size: 0,
+        uploadedAt: new Date(now - 1000 * 60 * 14).toISOString(),
+        previewUrl: samplePortraits.ava.src,
+        matches: [
+          {
+            personId: "person-sample-ava",
+            personName: "Ava Morales",
+            confidence: 84.6,
+            status: "needs_review",
+          },
+        ],
+      },
+      {
+        id: "photo-sample-stage",
+        name: "stage-portrait-0118.jpg",
+        size: 0,
+        uploadedAt: new Date(now - 1000 * 60 * 33).toISOString(),
+        previewUrl: samplePortraits.maya.src,
+        matches: [
+          {
+            personId: "person-sample-maya",
+            personName: "Maya Johnson",
+            confidence: 96.2,
+            status: "matched",
+          },
+        ],
+      },
+      {
+        id: "photo-sample-arrivals",
+        name: "arrivals-0412.jpg",
+        size: 0,
+        uploadedAt: new Date(now - 1000 * 60 * 55).toISOString(),
+        previewUrl: samplePortraits.noah.src,
+        matches: [
+          {
+            personId: "person-sample-noah",
+            personName: "Noah Kim",
+            confidence: 91.7,
+            status: "matched",
+          },
+        ],
+      },
+    ],
+  };
+}

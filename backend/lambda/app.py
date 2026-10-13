@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -6,7 +8,7 @@ import time
 import uuid
 from decimal import Decimal
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -20,6 +22,7 @@ PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 MATCHES_TABLE = os.environ["MATCHES_TABLE"]
 UPLOADS_TABLE = os.environ["UPLOADS_TABLE"]
 COLLECTION_ID = os.environ["COLLECTION_ID"]
+INTAKE_TOKEN_SECRET = os.environ.get("INTAKE_TOKEN_SECRET", "")
 EVENTS_OWNER_INDEX = os.environ.get("EVENTS_OWNER_INDEX", "owner_id-created_at-index")
 PEOPLE_OWNER_INDEX = os.environ.get("PEOPLE_OWNER_INDEX", "owner_id-name-index")
 PHOTOS_OWNER_INDEX = os.environ.get("PHOTOS_OWNER_INDEX", "owner_id-uploaded_at-index")
@@ -57,6 +60,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         if method == "OPTIONS":
             result = response(204, {}, event)
+        elif method == "GET" and path == "/guest-intake":
+            result = response(200, get_guest_intake(event.get("queryStringParameters") or {}), event)
+        elif method == "POST" and path == "/guest-intake/presign":
+            result = response(200, presign_guest_references(read_json(event)), event)
+        elif method == "POST" and path == "/guest-intake/process":
+            result = response(200, process_guest_references(read_json(event)), event)
         else:
             user_id = get_request_user_id(event)
 
@@ -64,6 +73,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 result = response(200, {"events": list_events(user_id)}, event)
             elif method == "POST" and path == "/events":
                 result = response(201, {"event": create_event(read_json(event), user_id)}, event)
+            elif method == "GET" and path.startswith("/events/") and path.endswith("/intake-link"):
+                event_id = extract_path_id(path.removesuffix("/intake-link"), "/events/")
+                result = response(200, get_event_intake_link(event_id, user_id, event), event)
             elif method == "GET" and path == "/library":
                 event_id = get_query_param(event, "eventId")
                 result = response(200, get_library(user_id, event_id), event)
@@ -178,6 +190,66 @@ def get_owned_event(event_id: str | None, user_id: str) -> dict[str, Any]:
     return event
 
 
+def sign_intake_token(event_id: str) -> str:
+    if not INTAKE_TOKEN_SECRET:
+        raise ValueError("Guest intake links are not configured.")
+    return hmac.new(INTAKE_TOKEN_SECRET.encode("utf-8"), event_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def get_public_event(event_id: str, token: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[a-f0-9]{64}", token) or not hmac.compare_digest(token, sign_intake_token(event_id)):
+        raise LookupError("Guest intake link was not found.")
+    event = events_table.get_item(Key={"id": event_id}).get("Item")
+    if not event:
+        raise LookupError("Guest intake link was not found.")
+    return event
+
+
+def get_event_intake_link(event_id: str, user_id: str, request_event: dict[str, Any]) -> dict[str, Any]:
+    event = get_owned_event(event_id, user_id)
+    token = sign_intake_token(event["id"])
+    origin = (request_event.get("headers") or {}).get("origin") or "http://localhost:5173"
+    if origin not in ALLOWED_ORIGINS:
+        origin = next((value for value in ALLOWED_ORIGINS if value.startswith("https://")), "http://localhost:5173")
+    return {"eventId": event["id"], "eventName": event["name"], "token": token,
+            "intakeUrl": f"{origin.rstrip('/')}/guest?eventId={quote(event['id'])}&token={quote(token)}"}
+
+
+def get_guest_intake(params: dict[str, Any]) -> dict[str, Any]:
+    event = get_public_event(require_string(params.get("eventId"), "eventId"), require_string(params.get("token"), "token"))
+    return {"eventId": event["id"], "eventName": event["name"]}
+
+
+def presign_guest_references(payload: dict[str, Any]) -> dict[str, Any]:
+    event = get_public_event(require_string(payload.get("eventId"), "eventId"), require_string(payload.get("token"), "token"))
+    guest_name = validate_guest_name(payload.get("guestName"))
+    result = presign_uploads({"eventId": event["id"], "mode": "references", "guestName": guest_name,
+                             "files": payload.get("files")}, event["owner_id"])
+    for upload in result["uploads"]:
+        session = uploads_table.get_item(Key={"id": upload["uploadId"]})["Item"]
+        uploads_table.put_item(Item={**session, "intake_source": "guest_submitted"})
+    return result
+
+
+def process_guest_references(payload: dict[str, Any]) -> dict[str, Any]:
+    event = get_public_event(require_string(payload.get("eventId"), "eventId"), require_string(payload.get("token"), "token"))
+    guest_name = validate_guest_name(payload.get("guestName"))
+    consent = validate_reference_consent(payload.get("consent"), expected_source="guest_submitted")
+    files = validate_processed_files(payload.get("files"), "references", event["owner_id"], event["id"])
+    legacy_person_id = f"person-{uuid.uuid4()}"
+    for file_item in files:
+        session = uploads_table.get_item(Key={"id": file_item["uploadId"]})["Item"]
+        # Sessions issued by the old guest portal stored a name but no person ID.
+        legacy_guest = session.get("guest_name") is not None and not session.get("person_id")
+        if session.get("guest_name") != guest_name or (
+            session.get("intake_source") != "guest_submitted" and not legacy_guest
+        ):
+            raise ValueError("Upload session does not match this guest signup.")
+        file_item["personName"] = guest_name
+        file_item["personId"] = session.get("person_id") or legacy_person_id
+    return process_reference_files(files, event["owner_id"], event["id"], consent)
+
+
 def validate_event_name(value: Any) -> str:
     name = re.sub(r"\s+", " ", str(value or "").strip())
     if len(name) < 2:
@@ -213,6 +285,24 @@ def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
     event_id = event["id"]
     mode = validate_mode(payload.get("mode"))
     files = validate_files(payload.get("files"))
+    guest_name = optional_string(payload.get("guestName"))
+    person_id = optional_string(payload.get("personId"))
+    existing_person = None
+    if guest_name or person_id:
+        if mode != "references":
+            raise ValueError("Guest details are only supported for reference photos.")
+        if person_id:
+            existing_person = get_owned_item(people_table, {"id": person_id}, user_id, "Guest")
+            if item_event_id(existing_person, user_id) != event_id:
+                raise ValueError("Guest does not belong to the selected event.")
+            if guest_name and validate_guest_name(guest_name) != existing_person["name"]:
+                raise ValueError("Guest name does not match the selected guest.")
+            guest_name = existing_person["name"]
+        else:
+            guest_name = validate_guest_name(guest_name)
+            person_id = f"person-{uuid.uuid4()}"
+        if int((existing_person or {}).get("reference_count") or 0) + len(files) > MAX_REFS_PER_PERSON:
+            raise ValueError(f"Use at most {MAX_REFS_PER_PERSON} reference photos per guest.")
     upload_items = []
     now_prefix = time.strftime("%Y/%m/%d")
     owner_prefix = s3_owner_prefix(user_id)
@@ -250,6 +340,8 @@ def presign_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
                 "status": "issued",
                 "created_at": issued_at,
                 "expires_at": expires_at,
+                **({"guest_name": guest_name, "person_id": person_id,
+                    "existing_person": bool(existing_person)} if guest_name else {}),
             }
         )
         upload_items.append(
@@ -272,22 +364,29 @@ def process_uploads(payload: dict[str, Any], user_id: str) -> dict[str, Any]:
     event = get_owned_event(optional_string(payload.get("eventId")), user_id)
     event_id = event["id"]
     mode = validate_mode(payload.get("mode"))
+    consent = validate_reference_consent(payload.get("consent")) if mode == "references" else None
     files = validate_processed_files(payload.get("files"), mode, user_id, event_id)
 
     if mode == "references":
-        consent = validate_reference_consent(payload.get("consent"))
+        guest_name = optional_string(payload.get("guestName"))
+        person_id = optional_string(payload.get("personId"))
+        if guest_name and any(item.get("personName") != validate_guest_name(guest_name) for item in files):
+            raise ValueError("Guest name does not match the issued upload session.")
+        if person_id and any(item.get("personId") != person_id for item in files):
+            raise ValueError("Guest does not match the issued upload session.")
         return process_reference_files(files, user_id, event_id, consent)
 
     return process_photo_files(files, user_id, event_id)
 
 
-def validate_reference_consent(consent: Any) -> dict[str, str]:
+def validate_reference_consent(consent: Any, expected_source: str = "owner_attested") -> dict[str, str]:
     if not isinstance(consent, dict) or consent.get("confirmed") is not True:
         raise ValueError("Reference uploads require confirmed guest consent.")
 
     source = str(consent.get("source") or "owner_attested").strip()
-    if source not in {"owner_attested", "guest_submitted"}:
-        raise ValueError("Unsupported consent source.")
+    if source != expected_source:
+        raise ValueError("Owner reference uploads require owner-attested permission." if expected_source == "owner_attested"
+                         else "Guest reference uploads require guest-submitted permission.")
 
     return {
         "consentStatus": "captured",
@@ -296,23 +395,37 @@ def validate_reference_consent(consent: Any) -> dict[str, str]:
     }
 
 
+def validate_guest_name(value: Any) -> str:
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    if not name or len(name) > 80:
+        raise ValueError("Guest name needs 1 to 80 characters.")
+    if re.search(r"[\x00-\x1f\x7f]", name):
+        raise ValueError("Guest name must not contain control characters.")
+    return name
+
+
 def process_reference_files(
     files: list[dict[str, Any]],
     user_id: str,
     event_id: str,
     consent: dict[str, str],
 ) -> dict[str, Any]:
-    people = []
+    people = {}
+    warnings = []
     owner_prefix = s3_owner_prefix(user_id)
     event_token = event_s3_token(event_id)
 
     for file_item in files:
+        if file_item.get("existingPerson"):
+            person = get_owned_item(people_table, {"id": file_item["personId"]}, user_id, "Guest")
+            if item_event_id(person, user_id) != event_id:
+                raise ValueError("Guest does not belong to the selected event.")
         claim_upload_session(
             file_item, mode="references", user_id=user_id, event_id=event_id
         )
         try:
-            person_name = name_from_filename(file_item["name"])
-            person_id = f"person-{owner_prefix}-{event_token}-{slugify(person_name)}"
+            person_name = file_item.get("personName") or name_from_filename(file_item["name"])
+            person_id = file_item.get("personId") or f"person-{owner_prefix}-{event_token}-{slugify(person_name)}"
 
             indexed = rekognition.index_faces(
                 CollectionId=COLLECTION_ID,
@@ -330,6 +443,8 @@ def process_reference_files(
             ]
 
             if not face_ids:
+                delete_s3_object(file_item["key"])
+                warnings.append(f"No clear face found in {file_item['name']}. Choose a well-lit photo showing one face.")
                 mark_upload_processed(file_item["uploadId"])
                 continue
 
@@ -362,20 +477,24 @@ def process_reference_files(
                 },
                 ReturnValues="ALL_NEW",
             )
-            people.append(normalize_person(updated["Attributes"]))
+            people[person_id] = normalize_person(updated["Attributes"])
             mark_upload_processed(file_item["uploadId"])
         except Exception as error:
             mark_upload_failed(file_item["uploadId"], repr(error))
             raise
 
-    return {"people": people, "photos": []}
+    return {"people": list(people.values()), "photos": [], "warnings": warnings}
 
 
 def process_photo_files(
     files: list[dict[str, Any]], user_id: str, event_id: str
 ) -> dict[str, Any]:
     people = query_owner_event_items(people_table, PEOPLE_OWNER_INDEX, user_id, event_id)
-    people = sorted(people, key=lambda item: item.get("name", ""))[:MAX_COMPARE_PEOPLE]
+    if not people:
+        raise ValueError("Add a guest reference photo before uploading event photos.")
+    if len(people) > MAX_COMPARE_PEOPLE:
+        raise ValueError(f"This event exceeds the {MAX_COMPARE_PEOPLE}-guest matching limit. Use a smaller event before processing photos.")
+    people = sorted(people, key=lambda item: item.get("name", ""))
     photos = []
     owner_prefix = s3_owner_prefix(user_id)
 
@@ -668,11 +787,12 @@ def count_review_matches(photos: list[dict[str, Any]]) -> int:
         1
         for photo in photos
         for match in photo["matches"]
-        if match["status"] == "needs_review"
+        if match["status"] in {"matched", "needs_review"}
     )
 
 
 def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
+    reference_keys = item.get("reference_keys") or []
     return {
         "id": item["id"],
         "name": item["name"],
@@ -680,6 +800,9 @@ def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
         "referenceCount": int(item.get("reference_count") or 0),
         "photoCount": int(item.get("photo_count") or 0),
         "consentStatus": item.get("consent_status", "unknown"),
+        "consentSource": item.get("consent_source", ""),
+        "consentCapturedAt": item.get("consent_captured_at", ""),
+        "referencePreviewUrl": signed_get_url(reference_keys[0]) if reference_keys else "",
     }
 
 
@@ -697,8 +820,12 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
         size = int(file_item.get("size") or 0)
         if not name:
             raise ValueError("Each file needs a name.")
+        if size <= 0:
+            raise ValueError(f"{name} is empty. Choose a JPEG or PNG photo.")
         if size > MAX_UPLOAD_MB * 1024 * 1024:
             raise ValueError(f"{name} exceeds the {MAX_UPLOAD_MB} MB upload limit.")
+        if str(file_item.get("type") or "").lower() not in {"image/jpeg", "image/png"}:
+            raise ValueError(f"{name} must be a JPEG or PNG photo.")
         cleaned.append({"name": name, "size": size, "type": file_item.get("type")})
 
     return cleaned
@@ -728,6 +855,11 @@ def validate_processed_files(
         cleaned[index]["size"] = verified["size"]
         cleaned[index]["type"] = verified["content_type"]
         cleaned[index]["eventId"] = active_event_id
+        if mode == "references" and session.get("guest_name"):
+            cleaned[index]["personName"] = session["guest_name"]
+            if session.get("person_id"):
+                cleaned[index]["personId"] = session["person_id"]
+            cleaned[index]["existingPerson"] = bool(session.get("existing_person"))
     return cleaned
 
 
@@ -776,6 +908,12 @@ def get_query_param(event: dict[str, Any], key: str) -> str | None:
 def optional_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def require_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required.")
+    return value.strip()
 
 
 def get_request_user_id(event: dict[str, Any]) -> str:

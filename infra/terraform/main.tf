@@ -15,10 +15,16 @@ resource "random_id" "suffix" {
   byte_length = 3
 }
 
+resource "random_password" "intake_token_secret" {
+  length  = 64
+  special = false
+}
+
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = local.lambda_src_dir
   output_path = local.lambda_zip_path
+  excludes    = ["__pycache__", "__pycache__/*", "*.pyc"]
 }
 
 resource "aws_cognito_user_pool" "users" {
@@ -510,6 +516,7 @@ resource "aws_lambda_function" "api" {
       ALLOWED_ORIGINS            = join(",", var.allowed_origins)
       BUCKET_NAME                = aws_s3_bucket.assets.bucket
       COLLECTION_ID              = aws_rekognition_collection.faces.collection_id
+      INTAKE_TOKEN_SECRET        = var.intake_token_secret != "" ? var.intake_token_secret : random_password.intake_token_secret.result
       EVENTS_OWNER_INDEX         = "owner_id-created_at-index"
       EVENTS_TABLE               = aws_dynamodb_table.events.name
       MATCHED_THRESHOLD          = tostring(var.matched_threshold)
@@ -601,6 +608,22 @@ resource "aws_apigatewayv2_route" "presign" {
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "event_intake_link" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /events/{event_id}/intake-link"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "guest_intake" {
+  for_each           = toset(["GET /guest-intake", "POST /guest-intake/presign", "POST /guest-intake/process"])
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_route" "process" {

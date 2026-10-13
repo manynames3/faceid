@@ -10,7 +10,7 @@ The first deployed backend treated each authenticated owner as one photo library
 
 ## Decision
 
-Add a DynamoDB `events` table and include `event_id` on people, photos, matches, and upload sessions. Upload keys now use `users/<owner>/events/<event>/<mode>/...`, and `/library`, `/uploads/presign`, and `/uploads/process` accept an `eventId`. Reference processing requires owner-attested consent metadata. Match candidates use `matched` or `needs_review` as machine-generated states, and reviewers can update one match to `approved` or `rejected` through `PATCH /matches/{photoId}/{personId}`.
+Add a DynamoDB `events` table and include `event_id` on people, photos, matches, and upload sessions. Upload keys use `users/<owner>/events/<event>/<mode>/...`, and `/library`, `/uploads/presign`, and `/uploads/process` accept an `eventId`. Reference processing requires workflow-specific consent: owner-attested for host uploads, guest-submitted through the scoped portal in [ADR 0011](0011-event-scoped-guest-intake.md). Named sessions use opaque identifiers rather than merging same-name guests. `matched` and `needs_review` are machine-generated suggestions; both require owner approval before delivery export. Reviewers can approve, reject or correct a decision through `PATCH /matches/{photoId}/{personId}`.
 
 ## Consequences
 

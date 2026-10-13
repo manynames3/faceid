@@ -6,6 +6,7 @@ This creates the low-volume AWS backend for the Cloudflare Pages frontend:
 - Cognito user pool, Hosted UI domain, and web app client
 - API Gateway HTTP API
 - API Gateway JWT authorizer
+- Event-scoped guest signup routes with a server-side HMAC signing secret
 - Python Lambda API
 - On-demand DynamoDB tables for events, owner-scoped people, photos, matches, and upload sessions
 - Rekognition face collection
@@ -27,6 +28,10 @@ Upload sessions are stored in DynamoDB with TTL enabled. They add low-volume Dyn
 CloudWatch alarms are enabled by default and should stay low cost at this scale. Set `alarm_email` to receive email notifications through SNS. Set `budget_alert_email` to create an account-level monthly AWS Budget alert; leave it blank to skip budget creation.
 
 ## Deploy
+
+For a new stack, Terraform generates the guest signing secret and stores it in the Lambda environment and sensitive Terraform state. Do not commit state or `.tfvars` files. When importing an existing stack, securely supply its existing secret as `TF_VAR_intake_token_secret` to preserve guest links. Replacing the secret invalidates all previously shared links.
+
+This release checkout has no original production Terraform state. Do not apply or destroy from an empty state against the existing deployment: recover the original state or import the live resources first. Code-only releases can update the existing Lambda ZIP without changing its environment, preserving the signing secret and stored photos.
 
 ```bash
 cd infra/terraform

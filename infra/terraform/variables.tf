@@ -16,6 +16,13 @@ variable "allowed_origins" {
   default     = ["http://localhost:5173", "https://faceid-8dc.pages.dev"]
 }
 
+variable "intake_token_secret" {
+  description = "Optional existing guest-intake signing secret when importing a deployment. Blank generates a new secret; changing it invalidates existing guest links."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "auth_callback_urls" {
   description = "Allowed Cognito Hosted UI callback URLs for the frontend."
   type        = list(string)
@@ -29,7 +36,7 @@ variable "auth_logout_urls" {
 }
 
 variable "matched_threshold" {
-  description = "Rekognition similarity percentage treated as an automatic match."
+  description = "Rekognition similarity percentage for a high-score candidate; owner approval is still required."
   type        = number
   default     = 90
 }

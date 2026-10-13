@@ -2,7 +2,7 @@
 
 This frontend can run without a backend, but the production path uses a Cognito-authenticated AWS serverless API behind `VITE_API_BASE_URL`.
 
-All AWS API routes require:
+Owner AWS API routes require:
 
 ```text
 Authorization: Bearer <cognito-id-token>
@@ -18,7 +18,19 @@ If a request omits `eventId`, Lambda creates or uses a per-owner default event f
 
 ## Reference Uploads
 
-Use uploaded filenames as the first person label:
+### Guest Signup
+
+The JWT-protected `GET /events/{event_id}/intake-link` returns an event-specific `/guest?eventId=...&token=...` signup URL. The token is an HMAC capability, not an AWS credential or guest identity check. It does not automatically expire; the server signing secret stays private and rotating it invalidates all existing links.
+
+`GET /guest-intake?eventId=...&token=...` verifies the capability and returns only `eventId` and `eventName`. `POST /guest-intake/presign` accepts that pair, `guestName` and file metadata; it issues reference-only upload sessions for a new guest. `POST /guest-intake/process` accepts the same pair/name, the uploaded files and `consent: {confirmed: true, source: "guest_submitted"}`. Processing verifies the issued name, session, owner/event scope and S3 metadata. These public routes do not accept event-photo processing or expose the owner's library. New owner-issued sessions cannot be relabeled as guest-submitted; legacy guest sessions remain compatible.
+
+The public frontend does not send a host JWT with guest requests. Owner intake instead requires `owner_attested` permission. Both paths store the source/time and return the authoritative profile plus any no-face warnings. These records are not verified identity or legal-compliance guarantees.
+
+The owner workspace submits an explicit `guestName` with one or two reference photos. Lambda preserves the display name and creates one opaque person identifier for the whole submission, so two guests with the same name remain distinct. Optional `personId` adds references to an existing guest after ownership and event checks.
+
+Guest identity is bound to the upload session at presign time. Processing reads that trusted identity from the session and rejects a different supplied guest name or person identifier. A deleted guest cannot be recreated by processing their pending reference session.
+
+Older API clients that omit `guestName` and `personId` retain the filename-based label behavior:
 
 ```text
 jane-smith.jpg -> Jane Smith
@@ -30,15 +42,15 @@ Server flow:
 1. Issue an upload session and presigned S3 PUT URL.
 2. Store the image in S3 under the authenticated user's reference prefix.
 3. Verify the upload session, S3 object size, content type, and signed metadata.
-4. Parse the filename into a display name.
+4. Resolve the guest name and identifier from the issued session (or filename for legacy clients).
 5. Require consent confirmation from the authenticated owner.
-6. Create or find the person in the selected event workspace.
+6. Create or update the owner/event-scoped guest record.
 7. Call Rekognition `IndexFaces` with the person identifier as metadata.
 8. Save the Rekognition face ID, person ID, S3 key, source filename, event ID, and consent metadata.
 
 Reference images are currently managed through the person record. Deleting a person removes their stored reference image keys, Rekognition face IDs, and related matches.
 
-For events where guests may appear from different angles, upload multiple reference images for the same guest. A practical set is one front-facing image, one slight side angle, and one candid or event-like image. The backend caps the number of compared reference keys per person with `MAX_REFS_PER_PERSON`; raising it can improve recall for angle variation but also increases Rekognition calls.
+For angle variation, use one front-facing image and one slight side angle. Named intake enforces `MAX_REFS_PER_PERSON` (default two), because only that many reference keys are compared. Adding references does not reprocess photos already uploaded. References with no detected face return an actionable warning and their unusable S3 object is removed.
 
 ## Photo Uploads
 
@@ -47,7 +59,7 @@ Server flow:
 1. Issue an upload session and presigned S3 PUT URL.
 2. Store the image in S3 under the authenticated user's photo prefix.
 3. Verify the upload session, S3 object size, content type, and signed metadata.
-4. Load the known people from DynamoDB, capped by `MAX_COMPARE_PEOPLE`.
+4. Load known guests from DynamoDB and reject empty reference sets or events exceeding `MAX_COMPARE_PEOPLE`, rather than truncating the guest list.
 5. Compare the uploaded photo against each person's stored reference keys, capped by `MAX_REFS_PER_PERSON`.
 6. Call Rekognition `CompareFaces` for each bounded reference comparison.
 7. Save matches above the production threshold as `matched`.
@@ -59,15 +71,21 @@ Server flow:
 ```text
 GET /library
 GET /events
+GET /events/{event_id}/intake-link
 PATCH /matches/{photoId}/{personId}
 POST /events
 DELETE /people/{personId}
 DELETE /photos/{photoId}
 POST /uploads/presign
 POST /uploads/process
+GET /guest-intake
+POST /guest-intake/presign
+POST /guest-intake/process
 ```
 
 The browser uploads directly to S3 by first requesting presigned PUT URLs, then asking the API to process those uploaded keys.
+
+Inputs must be non-empty JPEG or PNG files, with the configured size and batch limits. This follows [Rekognition's supported image formats and quotas](https://docs.aws.amazon.com/rekognition/latest/dg/limits.html). The browser uses one event photo per processing request to keep results and failures visible independently. This does not turn the synchronous Lambda into a durable background job.
 
 ### POST /uploads/presign
 
@@ -77,6 +95,7 @@ Request:
 {
   "eventId": "event-uuid",
   "mode": "references",
+  "guestName": "Jane McDonald",
   "files": [
     { "name": "jane-smith.jpg", "size": 1200000, "type": "image/jpeg" }
   ]
@@ -110,6 +129,7 @@ Request:
 {
   "eventId": "event-uuid",
   "mode": "references",
+  "guestName": "Jane McDonald",
   "consent": {
     "confirmed": true,
     "source": "owner_attested"
@@ -134,6 +154,7 @@ Response:
 type UploadResult = {
   people: Person[];
   photos: PhotoAsset[];
+  warnings?: string[];
 };
 
 type LibraryResult = UploadResult & {
@@ -158,6 +179,9 @@ type Person = {
   photoCount: number;
   initials: string;
   consentStatus?: "captured" | "unknown";
+  consentSource?: string;
+  consentCapturedAt?: string;
+  referencePreviewUrl?: string;
 };
 
 type PhotoAsset = {
@@ -222,6 +246,12 @@ Request:
 ```
 
 Allowed decision statuses are `approved` and `rejected`.
+
+Decisions can be changed to the opposite outcome through the same endpoint. There is no reset-to-pending API. Both `matched` and `needs_review` remain unconfirmed until an owner decision.
+
+## Delivery Export
+
+The browser exports only approved guest/photo rows, grouped by stable guest identifiers. The manifest includes event, guest and photo identifiers, guest name, source filename, match similarity and review time. It quotes CSV cells and protects formula-prefixed names. It intentionally omits signed preview URLs, which are temporary bearer access to private images. This export has no new API endpoint and does not host or publish a guest gallery.
 
 ### DELETE /photos/{photoId}
 

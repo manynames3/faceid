@@ -37,7 +37,11 @@ export function getStoredSession(): AuthSession | null {
     }
 
     const session = JSON.parse(rawValue) as AuthSession;
-    if (!session.idToken || !session.accessToken || session.expiresAt <= Date.now()) {
+    if (
+      typeof session.idToken !== "string" || !session.idToken ||
+      typeof session.accessToken !== "string" || !session.accessToken ||
+      !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()
+    ) {
       clearStoredSession();
       return null;
     }
@@ -49,7 +53,39 @@ export function getStoredSession(): AuthSession | null {
   }
 }
 
-export async function completeSignInFromUrl(): Promise<AuthSession | null> {
+/** True when the URL is a Cognito redirect (a code or an error) rather than a normal visit. */
+export function hasAuthCallbackParams(search: string = window.location.search) {
+  if (!hasConfiguredAuth) {
+    return false;
+  }
+  const params = new URLSearchParams(search);
+  return params.has("code") || params.has("error");
+}
+
+// The authorization code can be exchanged only once. React StrictMode runs
+// effects twice in development, so every caller on this page load shares one
+// exchange instead of racing a second request that would fail.
+let completion: Promise<AuthSession | null> | null = null;
+
+export function completeSignInFromUrl(): Promise<AuthSession | null> {
+  if (!completion) {
+    const current = runSignInCompletion();
+    completion = current;
+    const release = () => {
+      // Keep the shared result through the synchronous double-invoke, then let
+      // a later visit start fresh.
+      setTimeout(() => {
+        if (completion === current) {
+          completion = null;
+        }
+      }, 0);
+    };
+    current.then(release, release);
+  }
+  return completion;
+}
+
+async function runSignInCompletion(): Promise<AuthSession | null> {
   if (!hasConfiguredAuth || !authDomain || !authClientId) {
     return null;
   }
@@ -59,7 +95,7 @@ export async function completeSignInFromUrl(): Promise<AuthSession | null> {
   const code = params.get("code");
 
   if (authError) {
-    clearAuthQueryParams();
+    discardSignInAttempt();
     throw new Error(`Sign-in failed: ${authError}`);
   }
 
@@ -72,48 +108,58 @@ export async function completeSignInFromUrl(): Promise<AuthSession | null> {
   const actualState = params.get("state");
 
   if (!verifier || !expectedState || expectedState !== actualState) {
-    clearAuthQueryParams();
-    throw new Error("Sign-in response could not be verified.");
+    discardSignInAttempt();
+    throw new Error("This sign-in link has expired or was already used. Start sign-in again.");
   }
 
-  const tokenResponse = await fetch(`${authDomain}/oauth2/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: authClientId,
-      code,
-      code_verifier: verifier,
-      grant_type: "authorization_code",
-      redirect_uri: authRedirectUri,
-    }),
-  });
-
-  if (!tokenResponse.ok) {
-    clearAuthQueryParams();
-    throw new Error(`Sign-in token exchange failed with status ${tokenResponse.status}`);
-  }
-
-  const tokens = (await tokenResponse.json()) as TokenResponse;
-  if (!tokens.id_token || !tokens.access_token) {
-    clearAuthQueryParams();
-    throw new Error("Sign-in response did not include usable tokens.");
-  }
-
-  const claims = parseJwtPayload(tokens.id_token);
-  const session: AuthSession = {
-    accessToken: tokens.access_token,
-    email: stringClaim(claims.email),
-    expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-    idToken: tokens.id_token,
-    userId: stringClaim(claims.sub),
-  };
-
-  sessionStorage.setItem(tokenStorageKey, JSON.stringify(session));
-  sessionStorage.removeItem(verifierStorageKey);
-  sessionStorage.removeItem(stateStorageKey);
+  // Cleared up front so a reload or back-navigation can't replay the code.
   clearAuthQueryParams();
 
-  return session;
+  try {
+    const tokenResponse = await fetch(`${authDomain}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: authClientId,
+        code,
+        code_verifier: verifier,
+        grant_type: "authorization_code",
+        redirect_uri: authRedirectUri,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      throw new Error(
+        `Sign-in couldn't be completed (status ${tokenResponse.status}). Start sign-in again.`,
+      );
+    }
+
+    const tokens = (await tokenResponse.json()) as TokenResponse;
+    if (!tokens.id_token || !tokens.access_token) {
+      throw new Error("Sign-in response did not include usable tokens.");
+    }
+
+    const claims = parseJwtPayload(tokens.id_token);
+    const session: AuthSession = {
+      accessToken: tokens.access_token,
+      email: stringClaim(claims.email),
+      expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+      idToken: tokens.id_token,
+      userId: stringClaim(claims.sub),
+    };
+
+    sessionStorage.setItem(tokenStorageKey, JSON.stringify(session));
+    return session;
+  } catch (error) {
+    clearStoredSession();
+    if (error instanceof TypeError) {
+      throw new Error("Couldn't reach the sign-in service. Check your connection and try again.");
+    }
+    throw error;
+  } finally {
+    sessionStorage.removeItem(verifierStorageKey);
+    sessionStorage.removeItem(stateStorageKey);
+  }
 }
 
 export async function startSignIn() {
@@ -128,6 +174,12 @@ async function startHostedAuth(path: "oauth2/authorize" | "signup") {
   if (!hasConfiguredAuth || !authDomain || !authClientId) {
     throw new Error("Authentication is not configured.");
   }
+  if (!window.crypto?.subtle) {
+    throw new Error("Secure sign-in needs HTTPS (or localhost). Open the site over HTTPS.");
+  }
+
+  // Start from a clean slate so an abandoned earlier attempt can't confuse this one.
+  clearStoredSession();
 
   const verifier = randomBase64Url(32);
   const state = randomBase64Url(16);
@@ -151,6 +203,8 @@ async function startHostedAuth(path: "oauth2/authorize" | "signup") {
 
 export function signOut() {
   clearStoredSession();
+  sessionStorage.removeItem(verifierStorageKey);
+  sessionStorage.removeItem(stateStorageKey);
 
   if (!hasConfiguredAuth || !authDomain || !authClientId) {
     window.location.reload();
@@ -165,8 +219,15 @@ export function signOut() {
   window.location.assign(`${authDomain}/logout?${params.toString()}`);
 }
 
-function clearStoredSession() {
+/** Drops the stored session, e.g. when the service reports it has expired. */
+export function clearStoredSession() {
   sessionStorage.removeItem(tokenStorageKey);
+}
+
+function discardSignInAttempt() {
+  sessionStorage.removeItem(verifierStorageKey);
+  sessionStorage.removeItem(stateStorageKey);
+  clearAuthQueryParams();
 }
 
 function clearAuthQueryParams() {

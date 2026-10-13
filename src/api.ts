@@ -1,28 +1,49 @@
 import type { AuthSession } from "./auth";
+import {
+  ApiError,
+  apiErrorFromStatus,
+  isAbortError,
+  networkError,
+  type ApiStage,
+} from "./errors";
+import { normalizePhoto } from "./library";
+import { simulateUpload } from "./simulate";
 import type {
+  DecisionStatus,
   EventWorkspace,
   LibraryResult,
-  MatchStatus,
   Person,
-  PhotoAsset,
   PhotoMatch,
   UploadMode,
   UploadResult,
 } from "./types";
 
+export { ApiError } from "./errors";
+
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const apiBaseUrl = rawApiBaseUrl?.replace(/\/$/, "");
 
-type UploadPayload = {
+export type UploadPayload = {
   consentConfirmed?: boolean;
+  /** Sample workspace: simulate locally and never make a network request. */
+  demo?: boolean;
   eventId?: string;
-  mode: UploadMode;
   files: File[];
+  /** Name for a new guest (references only). */
+  guestName?: string;
+  /** Event-scoped guest signup capability; never an AWS credential. */
+  intakeToken?: string;
+  mode: UploadMode;
   people: Person[];
+  /** Add references to an existing guest instead of creating one (references only). */
+  personId?: string;
   session?: AuthSession | null;
 };
 
 export const hasConfiguredApi = Boolean(apiBaseUrl);
+
+export type GuestIntake = { eventId: string; eventName: string };
+export type IntakeLink = GuestIntake & { intakeUrl: string };
 
 type PresignResponse = {
   uploads: Array<{
@@ -42,104 +63,122 @@ type UploadedFile = {
   type: string;
 };
 
+function requireApi() {
+  if (!apiBaseUrl) {
+    throw new Error("The live service isn't configured for this build.");
+  }
+  return apiBaseUrl;
+}
+
+async function request(url: string, init: RequestInit, stage: ApiStage = "request") {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw networkError(stage);
+  }
+
+  if (!response.ok) {
+    let message: unknown;
+    try {
+      message = ((await response.json()) as { message?: unknown }).message;
+    } catch {
+      message = undefined;
+    }
+    throw apiErrorFromStatus(response.status, message, stage);
+  }
+
+  return response;
+}
+
+async function readJson<T>(response: Response, stage: ApiStage = "request"): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ApiError({
+      kind: "server",
+      message: "The service sent a reply we couldn't read. Refresh and try again.",
+      stage,
+      status: response.status,
+    });
+  }
+}
+
 export async function fetchEvents(
   session?: AuthSession | null,
+  signal?: AbortSignal,
 ): Promise<EventWorkspace[]> {
-  if (!apiBaseUrl) {
-    return [];
-  }
-
-  const response = await fetch(`${apiBaseUrl}/events`, {
+  const response = await request(`${requireApi()}/events`, {
     headers: authHeaders(session),
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`Event load failed with status ${response.status}`);
-  }
-
-  const result = (await response.json()) as { events: EventWorkspace[] };
-  return result.events;
+  const result = await readJson<{ events?: EventWorkspace[] }>(response);
+  return result.events ?? [];
 }
 
 export async function createEvent(
   name: string,
   session?: AuthSession | null,
 ): Promise<EventWorkspace> {
-  if (!apiBaseUrl) {
-    return {
-      id: `event-${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`,
-      name,
-      createdAt: new Date().toISOString(),
-      status: "active",
-      guestCount: 0,
-      photoCount: 0,
-      reviewCount: 0,
-    };
-  }
-
-  const response = await fetch(`${apiBaseUrl}/events`, {
+  const response = await request(`${requireApi()}/events`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders(session) },
     body: JSON.stringify({ name }),
   });
-  if (!response.ok) {
-    throw new Error(`Event create failed with status ${response.status}`);
-  }
-
-  const result = (await response.json()) as { event: EventWorkspace };
+  const result = await readJson<{ event: EventWorkspace }>(response);
   return result.event;
+}
+
+export async function fetchIntakeLink(eventId: string, session: AuthSession): Promise<IntakeLink> {
+  const response = await request(`${requireApi()}/events/${encodeURIComponent(eventId)}/intake-link`, {
+    headers: authHeaders(session),
+  });
+  return readJson<IntakeLink>(response);
+}
+
+export async function fetchGuestIntake(eventId: string, token: string, signal?: AbortSignal): Promise<GuestIntake> {
+  const params = new URLSearchParams({ eventId, token });
+  const response = await request(`${requireApi()}/guest-intake?${params}`, { signal });
+  return readJson<GuestIntake>(response);
 }
 
 export async function fetchLibrary(
   eventId?: string,
   session?: AuthSession | null,
+  signal?: AbortSignal,
 ): Promise<LibraryResult> {
-  if (!apiBaseUrl) {
-    return { people: [], photos: [] };
-  }
-
-  const url = new URL(`${apiBaseUrl}/library`);
+  const url = new URL(`${requireApi()}/library`);
   if (eventId) {
     url.searchParams.set("eventId", eventId);
   }
 
-  const response = await fetch(url.toString(), {
+  const response = await request(url.toString(), {
     headers: authHeaders(session),
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`Library load failed with status ${response.status}`);
-  }
-
-  return response.json() as Promise<LibraryResult>;
+  const result = await readJson<Partial<LibraryResult>>(response);
+  return {
+    ...result,
+    people: result.people ?? [],
+    photos: (result.photos ?? []).map(normalizePhoto),
+  };
 }
 
 export async function deletePhoto(photoId: string, session?: AuthSession | null) {
-  if (!apiBaseUrl) {
-    return;
-  }
-
-  const response = await fetch(`${apiBaseUrl}/photos/${encodeURIComponent(photoId)}`, {
+  await request(`${requireApi()}/photos/${encodeURIComponent(photoId)}`, {
     headers: authHeaders(session),
     method: "DELETE",
   });
-
-  if (!response.ok) {
-    throw new Error(`Photo delete failed with status ${response.status}`);
-  }
 }
 
 export async function deletePerson(personId: string, session?: AuthSession | null) {
-  if (!apiBaseUrl) {
-    return;
-  }
-
-  const response = await fetch(`${apiBaseUrl}/people/${encodeURIComponent(personId)}`, {
+  await request(`${requireApi()}/people/${encodeURIComponent(personId)}`, {
     headers: authHeaders(session),
     method: "DELETE",
   });
-
-  if (!response.ok) {
-    throw new Error(`Person delete failed with status ${response.status}`);
-  }
 }
 
 export async function updateMatchStatus({
@@ -151,14 +190,10 @@ export async function updateMatchStatus({
   photoId: string;
   personId: string;
   session?: AuthSession | null;
-  status: Extract<MatchStatus, "approved" | "rejected">;
+  status: DecisionStatus;
 }): Promise<PhotoMatch | null> {
-  if (!apiBaseUrl) {
-    return null;
-  }
-
-  const response = await fetch(
-    `${apiBaseUrl}/matches/${encodeURIComponent(photoId)}/${encodeURIComponent(personId)}`,
+  const response = await request(
+    `${requireApi()}/matches/${encodeURIComponent(photoId)}/${encodeURIComponent(personId)}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...authHeaders(session) },
@@ -166,61 +201,97 @@ export async function updateMatchStatus({
     },
   );
 
-  if (!response.ok) {
-    throw new Error(`Review update failed with status ${response.status}`);
-  }
-
-  const result = (await response.json()) as { match: PhotoMatch };
-  return result.match;
+  const result = await readJson<{ match?: PhotoMatch }>(response);
+  return result.match ?? null;
 }
 
+/**
+ * Uploads one request's worth of files and returns the service's snapshot.
+ * Callers decide the batch size (one event photo per request; up to two
+ * references per request).
+ */
 export async function submitUpload({
   consentConfirmed,
+  demo,
   eventId,
-  mode,
   files,
+  guestName,
+  intakeToken,
+  mode,
   people,
+  personId,
   session,
 }: UploadPayload): Promise<UploadResult> {
-  if (!apiBaseUrl) {
-    return simulateUpload(mode, files, people);
+  if (demo) {
+    return simulateUpload({ files, guestName, mode, people, personId });
   }
 
-  const presignResponse = await fetch(`${apiBaseUrl}/uploads/presign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(session) },
-    body: JSON.stringify({
-      eventId,
-      mode,
-      files: files.map((file) => ({
-        name: file.name,
-        size: file.size,
-        type: file.type || "application/octet-stream",
-      })),
-    }),
-  });
-
-  if (!presignResponse.ok) {
-    throw new Error(`Upload setup failed with status ${presignResponse.status}`);
+  const base = requireApi();
+  const isGuest = intakeToken !== undefined;
+  if (isGuest && (mode !== "references" || !guestName || !eventId || !intakeToken || personId)) {
+    throw new Error("Guest signup needs an event link, a name and new reference photos.");
   }
+  const uploadPath = isGuest ? "guest-intake" : "uploads";
+  const guestFields =
+    mode === "references"
+      ? {
+          guestName: guestName || undefined,
+          personId: personId || undefined,
+        }
+      : {};
 
-  const { uploads } = (await presignResponse.json()) as PresignResponse;
+  const presignResponse = await request(
+    `${base}/${uploadPath}/presign`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders(isGuest ? null : session) },
+      body: JSON.stringify({
+        token: intakeToken,
+        eventId,
+        mode,
+        ...guestFields,
+        files: files.map((file) => ({
+          name: file.name,
+          size: file.size,
+          type: file.type || "application/octet-stream",
+        })),
+      }),
+    },
+    "presign",
+  );
+
+  const { uploads } = await readJson<PresignResponse>(presignResponse, "presign");
   const uploadedFiles: UploadedFile[] = [];
 
   for (const [index, file] of files.entries()) {
     const upload = uploads[index];
     if (!upload) {
-      throw new Error(`No upload URL returned for ${file.name}`);
+      throw new ApiError({
+        kind: "server",
+        message: `The service didn't return an upload slot for ${file.name}. Try again.`,
+        stage: "presign",
+        status: 200,
+      });
     }
 
-    const putResponse = await fetch(upload.url, {
-      method: "PUT",
-      headers: upload.headers,
-      body: file,
-    });
+    let putResponse: Response;
+    try {
+      putResponse = await fetch(upload.url, {
+        method: "PUT",
+        headers: upload.headers,
+        body: file,
+      });
+    } catch {
+      throw networkError("upload");
+    }
 
     if (!putResponse.ok) {
-      throw new Error(`S3 upload failed for ${file.name}`);
+      throw new ApiError({
+        kind: putResponse.status >= 500 ? "server" : "unknown",
+        message: `Couldn't upload ${file.name} to storage (status ${putResponse.status}). Try again.`,
+        stage: "upload",
+        status: putResponse.status,
+      });
     }
 
     uploadedFiles.push({
@@ -232,117 +303,34 @@ export async function submitUpload({
     });
   }
 
-  const response = await fetch(`${apiBaseUrl}/uploads/process`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(session) },
-    body: JSON.stringify({
-      consent:
-        mode === "references"
-          ? { confirmed: consentConfirmed === true, source: "owner_attested" }
-          : undefined,
-      eventId,
-      mode,
-      files: uploadedFiles,
-    }),
-  });
+  const response = await request(
+    `${base}/${uploadPath}/process`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders(isGuest ? null : session) },
+      body: JSON.stringify({
+        token: intakeToken,
+        consent:
+          mode === "references"
+            ? { confirmed: consentConfirmed === true, source: isGuest ? "guest_submitted" : "owner_attested" }
+            : undefined,
+        eventId,
+        mode,
+        ...guestFields,
+        files: uploadedFiles,
+      }),
+    },
+    "process",
+  );
 
-  if (!response.ok) {
-    throw new Error(`Photo processing failed with status ${response.status}`);
-  }
-
-  return response.json() as Promise<UploadResult>;
+  const result = await readJson<Partial<UploadResult>>(response, "process");
+  return {
+    people: result.people ?? [],
+    photos: (result.photos ?? []).map(normalizePhoto),
+    warnings: Array.isArray(result.warnings) ? result.warnings.map(String) : undefined,
+  };
 }
 
 function authHeaders(session?: AuthSession | null): Record<string, string> {
   return session ? { Authorization: `Bearer ${session.idToken}` } : {};
-}
-
-async function simulateUpload(
-  mode: UploadMode,
-  files: File[],
-  people: Person[],
-): Promise<UploadResult> {
-  await new Promise((resolve) => window.setTimeout(resolve, 650));
-
-  if (mode === "references") {
-    const nextPeople = files.map((file) => {
-      const name = nameFromFilename(file.name);
-      return {
-        id: `person-${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`,
-        name,
-        initials: initialsFromName(name),
-        consentStatus: "captured",
-        referenceCount: 1,
-        photoCount: 0,
-      } satisfies Person;
-    });
-
-    return { people: nextPeople, photos: [] };
-  }
-
-  const fallbackPerson: Person = {
-    id: "unknown",
-    name: "Unknown",
-    initials: "?",
-    referenceCount: 0,
-    photoCount: 0,
-  };
-
-  const seededPeople = people.length > 0 ? people : [fallbackPerson];
-  const photos = files.map((file, index) => {
-    const primary = seededPeople[index % seededPeople.length];
-    const secondary = seededPeople[(index + 1) % seededPeople.length];
-    const confidence = 72 + ((file.name.length * 7 + index * 11) % 270) / 10;
-    const includeSecond = seededPeople.length > 1 && index % 3 === 0;
-
-    const matches: PhotoMatch[] = [
-      {
-        personId: primary.id,
-        personName: primary.name,
-        confidence,
-        status: confidence >= 86 ? "matched" : "needs_review",
-      },
-    ];
-
-    if (includeSecond) {
-      matches.push({
-        personId: secondary.id,
-        personName: secondary.name,
-        confidence: 88.1,
-        status: "matched",
-      });
-    }
-
-    return {
-      id: `photo-${crypto.randomUUID()}`,
-      name: file.name,
-      size: file.size,
-      uploadedAt: new Date().toISOString(),
-      previewUrl: URL.createObjectURL(file),
-      matches,
-    } satisfies PhotoAsset;
-  });
-
-  return { people: [], photos };
-}
-
-function nameFromFilename(filename: string) {
-  const nameWithoutExtension = filename.replace(/\.[^.]+$/, "");
-  return nameWithoutExtension
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+\d+$/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function initialsFromName(name: string) {
-  const parts = name.split(" ").filter(Boolean);
-  const first = parts[0]?.[0] ?? "?";
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
-  return `${first}${last}`.toUpperCase();
-}
-
-function slugify(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
