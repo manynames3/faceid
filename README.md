@@ -18,9 +18,9 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 
 Captured from the local production build. Sample names, photos and matching scores are illustrative, not recognition benchmarks or customer evidence.
 
-[Sales Homepage](docs/screenshots/landing.jpg) · [Sample Workspace](docs/screenshots/workspace.jpg)
+[Sales Homepage](docs/screenshots/landing.jpg) · [Guest Workspace](docs/screenshots/workspace.jpg) · [Review Desk](docs/screenshots/review.jpg)
 
-![Sample photo review workspace](docs/screenshots/workspace.jpg)
+![Portrait-led guest workspace with permission status and review counts](docs/screenshots/workspace.jpg)
 
 ## Tech Stack
 
@@ -46,7 +46,7 @@ Captured from the local production build. Sample names, photos and matching scor
 - Approved-only delivery lists contain durable guest/photo identifiers and filenames, with spreadsheet formula protection and no signed URLs.
 - DynamoDB-backed upload sessions that verify issued S3 keys, object size, content type, and upload metadata before processing.
 - Owner-scoped delete flows for removing uploaded photos and reference/person records from S3, DynamoDB, and Rekognition.
-- Guests, Photos, Review and Deliver views, full-size reference comparison, corrected decisions, and per-file partial/error states.
+- Portrait-led Guests, Photos, Review and Deliver views, focused intake dialogs, a side-by-side review desk, corrected decisions, and per-file partial/error states.
 - Focused frontend and backend tests for API upload contracts, auth context, and upload validation.
 - GitHub Actions CI for linting, tests, frontend build, Lambda syntax, and Terraform validation.
 - Structured Lambda logs, API Gateway access logs, CloudWatch alarms, and optional AWS Budget alerts.
@@ -92,8 +92,8 @@ For the real workspace, copy `.env.example` to `.env.local` and populate all thr
 ## First Event
 
 1. Sign in and create an event.
-2. In Guests, get the event signup link and share it only with invited guests. They submit a name, one or two clear JPEG/PNG face photos and permission without an account. Or add references yourself after confirming their permission. No filename renaming is required.
-3. In Photos, upload the event photos. References must be ready first; adding references later does not automatically rematch older photos.
+2. In Guests, choose **Invite guests** and copy the signup link. Share it only with invited guests. They submit a name, one or two clear JPEG/PNG face photos and permission without an account. Or choose **Add manually** and confirm their permission. No filename renaming is required.
+3. In Photos, choose **Upload photos** to select or drop event photos. References must be ready first; adding references later does not automatically rematch older photos.
 4. In Review, inspect the whole image and reference photo, approve or reject candidates, and correct decisions when needed.
 5. In Deliver, export confirmed guest/photo rows or copy filenames into the existing gallery delivery workflow. Unreviewed and rejected suggestions are excluded. This is a file list, not a hosted guest gallery.
 

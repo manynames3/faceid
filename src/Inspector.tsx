@@ -61,16 +61,6 @@ export function DecisionButtons({
   return (
     <div className="decision-buttons">
       <button
-        aria-label={`Approve ${target}`}
-        className="button button-decision button-approve"
-        disabled={busy}
-        onClick={() => onReview(entry, "approved")}
-        type="button"
-      >
-        <Check aria-hidden="true" size={18} />
-        Approve
-      </button>
-      <button
         aria-label={`Reject ${target}`}
         className="button button-decision button-reject"
         disabled={busy}
@@ -78,7 +68,17 @@ export function DecisionButtons({
         type="button"
       >
         <X aria-hidden="true" size={18} />
-        Reject
+        Not this guest
+      </button>
+      <button
+        aria-label={`Approve ${target}`}
+        className="button button-decision button-approve"
+        disabled={busy}
+        onClick={() => onReview(entry, "approved")}
+        type="button"
+      >
+        <Check aria-hidden="true" size={18} />
+        Approve match
       </button>
     </div>
   );
@@ -111,7 +111,10 @@ export function Inspector({
   const previousButtonRef = useRef<HTMLButtonElement>(null);
   const nextButtonRef = useRef<HTMLButtonElement>(null);
   const [requestedIndex, setRequestedIndex] = useState(() =>
-    Math.max(0, items.findIndex((item) => item.key === startKey)),
+    Math.max(
+      0,
+      items.findIndex((item) => item.key === startKey),
+    ),
   );
 
   useEffect(() => {
@@ -131,7 +134,8 @@ export function Inspector({
   const hasNext = index < items.length - 1;
 
   function step(direction: -1 | 1) {
-    const fromNavigation = document.activeElement === previousButtonRef.current ||
+    const fromNavigation =
+      document.activeElement === previousButtonRef.current ||
       document.activeElement === nextButtonRef.current;
     setRequestedIndex(Math.min(Math.max(index + direction, 0), items.length - 1));
     if (fromNavigation) {
@@ -183,7 +187,12 @@ export function Inspector({
         <span aria-live="polite" className="muted">
           {index + 1} of {items.length}
         </span>
-        <button aria-label="Close photo viewer" className="button button-icon" onClick={onClose} type="button">
+        <button
+          aria-label="Close photo viewer"
+          className="button button-icon"
+          onClick={onClose}
+          type="button"
+        >
           <X aria-hidden="true" size={20} />
         </button>
       </header>
@@ -270,7 +279,13 @@ export function Inspector({
               <ChevronLeft aria-hidden="true" size={18} />
               Previous
             </button>
-            <button className="button" disabled={!hasNext} onClick={() => step(1)} ref={nextButtonRef} type="button">
+            <button
+              className="button"
+              disabled={!hasNext}
+              onClick={() => step(1)}
+              ref={nextButtonRef}
+              type="button"
+            >
               Next
               <ChevronRight aria-hidden="true" size={18} />
             </button>

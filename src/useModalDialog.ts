@@ -19,6 +19,8 @@ export function useModalDialog() {
     if (!dialog.open) {
       dialog.showModal();
     }
+    // React's autoFocus can run while a newly mounted dialog is still hidden.
+    dialog.querySelector<HTMLElement>("[data-initial-focus]")?.focus();
     document.documentElement.classList.add("modal-open");
 
     return () => {

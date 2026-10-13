@@ -1,34 +1,19 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Expand } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DecisionButtons, Inspector } from "./Inspector";
 import { formatScore } from "./format";
-import { initialsFromName } from "./simulate";
 import { isUndecided, type ReviewEntry } from "./library";
 import type { DecisionStatus } from "./types";
-import { Avatar, EmptyState, PhotoImage, StatusBadge } from "./ui";
+import { EmptyState, PhotoImage, StatusBadge } from "./ui";
 
 type Filter = "pending" | "approved" | "rejected" | "all";
-
 const pageSize = 20;
-
 const filterLabels: Record<Filter, string> = {
-  all: "All",
+  pending: "To review",
   approved: "Approved",
-  pending: "Needs decision",
   rejected: "Rejected",
+  all: "All",
 };
-
-function matchesFilter(entry: ReviewEntry, filter: Filter) {
-  switch (filter) {
-    case "pending":
-      return isUndecided(entry.match.status);
-    case "approved":
-      return entry.match.status === "approved";
-    case "rejected":
-      return entry.match.status === "rejected";
-    default:
-      return true;
-  }
-}
 
 export function ReviewView({
   entries,
@@ -53,60 +38,67 @@ export function ReviewView({
 }) {
   const [filter, setFilter] = useState<Filter>("pending");
   const [visibleCount, setVisibleCount] = useState(pageSize);
+  const [selection, setSelection] = useState({ key: "", index: 0 });
   const [inspectorKey, setInspectorKey] = useState<string | null>(null);
   const closeInspector = useCallback(() => setInspectorKey(null), []);
-  const listRef = useRef<HTMLUListElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const previousRef = useRef<HTMLButtonElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
 
   const counts = useMemo(() => {
-    const result: Record<Filter, number> = { all: entries.length, approved: 0, pending: 0, rejected: 0 };
-    for (const entry of entries) {
-      if (entry.match.status === "approved") {
-        result.approved += 1;
-      } else if (entry.match.status === "rejected") {
-        result.rejected += 1;
-      } else {
-        result.pending += 1;
-      }
+    const result = { all: entries.length, approved: 0, pending: 0, rejected: 0 };
+    for (const { match } of entries) {
+      if (isUndecided(match.status)) result.pending++;
+      else if (match.status === "approved") result.approved++;
+      else result.rejected++;
     }
     return result;
   }, [entries]);
-
   const filtered = useMemo(
-    () => entries.filter((entry) => matchesFilter(entry, filter)),
+    () =>
+      entries.filter(
+        ({ match }) =>
+          filter === "all" ||
+          (filter === "pending" ? isUndecided(match.status) : match.status === filter),
+      ),
     [entries, filter],
   );
+  // Keep the same photo on failure; a saved decision advances only when it leaves this filter.
+  const selectedIndex = filtered.findIndex((entry) => entry.key === selection.key);
+  const index = selectedIndex >= 0 ? selectedIndex : Math.min(selection.index, filtered.length - 1);
+  const current = filtered[index];
+  const shown = filtered.slice(0, Math.max(visibleCount, index + 1));
   const inspectorItems = useMemo(
     () => filtered.map((entry) => ({ entry, key: entry.key, photo: entry.photo })),
     [filtered],
   );
-  const shown = filtered.slice(0, visibleCount);
 
-  // A decided row can leave the list; keep keyboard focus nearby instead of losing it.
-  async function handleReview(entry: ReviewEntry, status: DecisionStatus) {
-    const index = shown.findIndex((item) => item.key === entry.key);
-    const neighbour = shown[index + 1] ?? shown[index - 1];
-    await onReview(entry, status);
+  useEffect(() => {
+    if (!current && document.activeElement === document.body) headingRef.current?.focus();
+  }, [current]);
+
+  function select(nextIndex: number) {
+    const entry = filtered[nextIndex];
+    if (entry) setSelection({ key: entry.key, index: nextIndex });
+  }
+  function step(direction: -1 | 1) {
+    select(index + direction);
     requestAnimationFrame(() => {
-      const active = document.activeElement;
-      if (active && active !== document.body) {
-        return;
-      }
-      const row = neighbour
-        ? Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-key]") ?? []).find(
-            (element) => element.dataset.key === neighbour.key,
-          )
-        : undefined;
-      (row?.querySelector<HTMLElement>("button.button-decision") ?? headingRef.current)?.focus();
+      const preferred = direction === 1 ? nextRef.current : previousRef.current;
+      const fallback = direction === 1 ? previousRef.current : nextRef.current;
+      (preferred?.disabled ? fallback : preferred)?.focus();
     });
   }
 
   return (
     <div className="view review-view">
-      <div className="section-head">
-        <h2 className="section-title" ref={headingRef} tabIndex={-1}>
-          Review matches
-        </h2>
+      <div className="view-heading">
+        <div>
+          <h1 ref={headingRef} tabIndex={-1}>
+            Review matches
+          </h1>
+          <p className="view-subtitle">Only approved matches enter the delivery list.</p>
+        </div>
         <div aria-label="Filter by decision" className="segmented" role="group">
           {(Object.keys(filterLabels) as Filter[]).map((key) => (
             <button
@@ -116,24 +108,22 @@ export function ReviewView({
               onClick={() => {
                 setFilter(key);
                 setVisibleCount(pageSize);
+                setSelection({ key: "", index: 0 });
               }}
               type="button"
             >
-              {filterLabels[key]} <span className="muted">{counts[key]}</span>
+              {filterLabels[key]} <span>{counts[key]}</span>
             </button>
           ))}
         </div>
       </div>
-
-      <p className="hint">
-        Only approved matches reach your delivery list. {isDemo
-          ? "These sample scores are simulated; no face analysis has run."
-          : "Matching scores are estimates, not identity proof."}
-      </p>
       {noMatchPhotoCount > 0 && (
         <p className="hint">
-          {noMatchPhotoCount} {noMatchPhotoCount === 1 ? "photo" : "photos"} matched no guest and
-          won't appear here. Find them under "No guest matched" on the Photos tab.
+          {noMatchPhotoCount} {noMatchPhotoCount === 1 ? "photo has" : "photos have"} no suggested
+          guest.{" "}
+          <button className="text-button" onClick={onGoToPhotos} type="button">
+            View event photos
+          </button>
         </p>
       )}
 
@@ -148,82 +138,181 @@ export function ReviewView({
         >
           {hasPhotos
             ? "None of the uploaded photos matched a guest."
-            : "Suggested matches show up here after you upload event photos."}
+            : "Suggested matches appear after you upload your event photos."}
         </EmptyState>
-      ) : filtered.length === 0 ? (
+      ) : !current ? (
         <EmptyState
           action={
             filter === "pending" && counts.approved > 0 ? (
               <button className="button button-primary" onClick={onGoToDeliver} type="button">
-                Go to Deliver
+                Open approved photo list
               </button>
             ) : undefined
           }
-          title={filter === "pending" ? "Every match has a decision" : "Nothing here"}
+          title={filter === "pending" ? "You're all caught up" : "No matches in this view"}
         >
           {filter === "pending"
-            ? "No suggested matches are waiting. You can change an earlier decision from the Approved or Rejected filters."
-            : "No matches have this decision."}
+            ? counts.approved > 0
+              ? "Every suggested match has a decision. Your approved photo list is ready, and earlier decisions can still be changed."
+              : "Every suggested match was rejected. Nothing will be included in delivery. You can still change earlier decisions."
+            : "There are no " + filter + " matches yet."}
         </EmptyState>
       ) : (
-        <>
-          <ul className="review-list" ref={listRef}>
-            {shown.map((entry) => {
-              const person = entry.person ?? {
-                initials: initialsFromName(entry.match.personName),
-                name: entry.match.personName,
-                referencePreviewUrl: undefined,
-              };
-              return (
-                <li className="review-row" data-key={entry.key} key={entry.key}>
+        <div className="review-desk">
+          <aside aria-label="Review queue" className="review-queue">
+            <h2>
+              {filterLabels[filter]} <span className="muted">{filtered.length}</span>
+            </h2>
+            <ul>
+              {shown.map((entry, itemIndex) => (
+                <li key={entry.key}>
                   <button
-                    aria-label={`View ${entry.photo.name} full size, suggested for ${entry.match.personName}`}
-                    className="review-thumb"
-                    onClick={() => setInspectorKey(entry.key)}
+                    aria-pressed={current.key === entry.key}
+                    className="review-queue-item"
+                    onClick={() => select(itemIndex)}
+                    title={entry.match.personName + " in " + entry.photo.name}
                     type="button"
                   >
-                    <PhotoImage
-                      alt={`Event photo ${entry.photo.name}`}
-                      className="review-thumb-image"
-                      src={entry.photo.previewUrl}
-                    />
+                    <PhotoImage alt="" src={entry.photo.previewUrl} />
+                    <span>
+                      <strong>{entry.match.personName}</strong>
+                      <small>{entry.photo.name}</small>
+                    </span>
                   </button>
-                  <div className="review-who">
-                    <Avatar person={person} />
-                    <div className="review-main">
-                      <h3 className="truncate">{entry.match.personName}</h3>
-                      <p className="meta">
-                        Matching score {formatScore(entry.match.confidence)}
-                      </p>
-                      <p className="meta truncate" title={entry.photo.name}>
-                        {entry.photo.name}
-                      </p>
-                      <StatusBadge status={entry.match.status} />
-                    </div>
-                  </div>
-                  <DecisionButtons
-                    busy={reviewingKeys.has(entry.key)}
-                    entry={entry}
-                    onReview={(item, status) => void handleReview(item, status)}
-                  />
                 </li>
-              );
-            })}
-          </ul>
-          {filtered.length > shown.length && (
-            <div className="show-more">
+              ))}
+            </ul>
+            {filtered.length > shown.length && (
               <button
-                className="button"
+                className="text-button"
                 onClick={() => setVisibleCount((count) => count + pageSize)}
                 type="button"
               >
-                Show more ({filtered.length - shown.length} left)
+                Show more ({filtered.length - shown.length})
               </button>
+            )}
+          </aside>
+          <section
+            aria-label={"Review " + current.match.personName + " in " + current.photo.name}
+            className="review-comparison"
+          >
+            <div className="comparison-images">
+              <figure className="comparison-event">
+                <figcaption>
+                  <strong>Event photo</strong>
+                  <span title={current.photo.name}>{current.photo.name}</span>
+                </figcaption>
+                <div className="review-navigation">
+                  <div className="mobile-review-picker field">
+                    <label className="visually-hidden" htmlFor="review-selection">
+                      Selected match
+                    </label>
+                    <select
+                      id="review-selection"
+                      onChange={(event) => select(Number(event.target.value))}
+                      value={index}
+                    >
+                      {filtered.map((entry, itemIndex) => (
+                        <option key={entry.key} value={itemIndex}>
+                          {itemIndex + 1}. {entry.match.personName} · {entry.photo.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <span className="review-position" aria-live="polite">
+                    {index + 1} of {filtered.length}
+                  </span>
+                  <div className="actions">
+                    <button
+                      aria-label="Previous match"
+                      className="button button-icon"
+                      disabled={index === 0}
+                      onClick={() => step(-1)}
+                      ref={previousRef}
+                      title="Previous match"
+                      type="button"
+                    >
+                      <ChevronLeft aria-hidden="true" size={19} />
+                    </button>
+                    <button
+                      aria-label="Next match"
+                      className="button button-icon"
+                      disabled={index >= filtered.length - 1}
+                      onClick={() => step(1)}
+                      ref={nextRef}
+                      title="Next match"
+                      type="button"
+                    >
+                      <ChevronRight aria-hidden="true" size={19} />
+                    </button>
+                  </div>
+                </div>
+                <div className="comparison-photo">
+                  <PhotoImage
+                    alt={"Event photo " + current.photo.name + ", shown without cropping"}
+                    eager
+                    onReload={onRefresh}
+                    src={current.photo.previewUrl}
+                  />
+                  <button
+                    aria-label="Open full-size photo comparison"
+                    className="button button-icon expand-photo"
+                    onClick={() => setInspectorKey(current.key)}
+                    title="Open full size"
+                    type="button"
+                  >
+                    <Expand aria-hidden="true" size={18} />
+                  </button>
+                </div>
+              </figure>
+              <div className="comparison-guest">
+                <figure>
+                  <figcaption>
+                    <strong>Guest reference</strong>
+                    <span>{current.match.personName}</span>
+                  </figcaption>
+                  <div className="comparison-reference">
+                    {current.person?.referencePreviewUrl ? (
+                      <PhotoImage
+                        alt={"Reference photo of " + current.match.personName}
+                        eager
+                        onReload={onRefresh}
+                        src={current.person.referencePreviewUrl}
+                      />
+                    ) : (
+                      <div className="image-fallback">No reference preview available</div>
+                    )}
+                  </div>
+                </figure>
+                <div className="comparison-result">
+                  <p>
+                    {isDemo ? "Sample score" : "Matching score"}{" "}
+                    <strong>{formatScore(current.match.confidence)}</strong>
+                  </p>
+                  <StatusBadge status={current.match.status} />
+                  <p className="hint">
+                    {isDemo
+                      ? "Simulated result. No face analysis has run."
+                      : "A suggested match, not proof of identity."}
+                  </p>
+                </div>
+              </div>
             </div>
-          )}
-        </>
+            <div className="review-decision-bar">
+              <span className="meta">
+                {reviewingKeys.has(current.key)
+                  ? "Saving your decision..."
+                  : current.match.personName}
+              </span>
+              <DecisionButtons
+                busy={reviewingKeys.has(current.key)}
+                entry={current}
+                onReview={(entry, status) => void onReview(entry, status)}
+              />
+            </div>
+          </section>
+        </div>
       )}
-
       {inspectorKey && (
         <Inspector
           isDemo={isDemo}

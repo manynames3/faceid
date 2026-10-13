@@ -9,7 +9,7 @@ import {
 } from "./delivery";
 import { pluralize } from "./format";
 import type { Person, PhotoAsset } from "./types";
-import { EmptyState } from "./ui";
+import { Avatar, EmptyState, PhotoImage } from "./ui";
 
 type Feedback = { text: string; tone: "success" | "error" };
 
@@ -35,7 +35,10 @@ export function DeliverView({
   people: Person[];
   photos: PhotoAsset[];
 }) {
-  const manifest = useMemo(() => buildManifest({ eventId, people, photos }), [eventId, people, photos]);
+  const manifest = useMemo(
+    () => buildManifest({ eventId, people, photos }),
+    [eventId, people, photos],
+  );
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const isPartial = manifest.pendingCount > 0;
@@ -73,10 +76,13 @@ export function DeliverView({
 
   return (
     <div className="view deliver-view">
-      <section aria-labelledby="deliver-title" className="panel">
-        <h2 className="panel-title" id="deliver-title">
-          Approved photo list
-        </h2>
+      <section aria-labelledby="deliver-title" className="delivery-overview">
+        <div className="view-heading">
+          <div>
+            <h1 id="deliver-title">Approved photo list</h1>
+            <p className="view-subtitle">A personal list for each guest, ready for your handoff.</p>
+          </div>
+        </div>
 
         {isEmpty ? (
           <EmptyState
@@ -119,26 +125,28 @@ export function DeliverView({
           </div>
         )}
 
-        <div className="actions">
-          <button
-            className="button button-primary"
-            disabled={isEmpty}
-            onClick={downloadCsv}
-            type="button"
-          >
-            <Download aria-hidden="true" size={18} />
-            {isPartial ? "Download partial CSV" : "Download CSV"}
-          </button>
-          <button
-            className="button"
-            disabled={isEmpty}
-            onClick={() => void copy(manifestToText(manifest), "all filenames, grouped by guest")}
-            type="button"
-          >
-            <ClipboardCopy aria-hidden="true" size={18} />
-            Copy all filenames
-          </button>
-        </div>
+        {!isEmpty && (
+          <div className="actions">
+            <button
+              className="button button-primary"
+              disabled={isEmpty}
+              onClick={downloadCsv}
+              type="button"
+            >
+              <Download aria-hidden="true" size={18} />
+              {isPartial ? "Download partial CSV" : "Download CSV"}
+            </button>
+            <button
+              className="button"
+              disabled={isEmpty}
+              onClick={() => void copy(manifestToText(manifest), "all filenames, grouped by guest")}
+              type="button"
+            >
+              <ClipboardCopy aria-hidden="true" size={18} />
+              Copy all filenames
+            </button>
+          </div>
+        )}
 
         <div aria-live="polite" role="status">
           {feedback && (
@@ -147,9 +155,8 @@ export function DeliverView({
         </div>
 
         <p className="hint">
-          This is a photo list for your existing delivery workflow. FaceID Events doesn't host guest
-          galleries or create download links. The CSV leaves out image links on purpose: they expire
-          and anyone holding one can open the photo.
+          Exports contain approved filenames, not the photos themselves. Deliver photos through your
+          usual gallery service.
         </p>
       </section>
 
@@ -162,6 +169,14 @@ export function DeliverView({
             {manifest.guests.map((guest) => (
               <li className="deliver-row" key={guest.guestId}>
                 <div className="deliver-row-head">
+                  <Avatar
+                    person={
+                      people.find((person) => person.id === guest.guestId) ?? {
+                        name: guest.guestName,
+                        initials: guest.guestName.slice(0, 1),
+                      }
+                    }
+                  />
                   <h3 className="truncate">{guest.guestName}</h3>
                   <span className="muted">{pluralize(guest.filenames.length, "photo")}</span>
                   <button
@@ -174,6 +189,15 @@ export function DeliverView({
                     <ClipboardCopy aria-hidden="true" size={17} />
                     Copy filenames
                   </button>
+                </div>
+                <div className="delivery-previews">
+                  {guest.rows.slice(0, 4).map((row) => {
+                    const photo = photos.find((item) => item.id === row.photoId);
+                    return photo ? (
+                      <PhotoImage alt={photo.name} key={photo.id} src={photo.previewUrl} />
+                    ) : null;
+                  })}
+                  {guest.rows.length > 4 && <span>+{guest.rows.length - 4} more</span>}
                 </div>
                 <details>
                   <summary>Show filenames</summary>

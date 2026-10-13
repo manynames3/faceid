@@ -1,6 +1,8 @@
 import {
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Info,
   LogOut,
   Plus,
@@ -15,15 +17,11 @@ import { DeliverView } from "./DeliverView";
 import { pluralize } from "./format";
 import { GuestsView } from "./GuestsView";
 import { Link } from "./Link";
-import {
-  buildReviewEntries,
-  countPendingDecisions,
-  deriveGuestStats,
-} from "./library";
+import { buildReviewEntries, countPendingDecisions, deriveGuestStats } from "./library";
 import { PhotosView } from "./PhotosView";
 import { ReviewView } from "./ReviewView";
 import type { AuthSession } from "./auth";
-import { EmptyState, Spinner } from "./ui";
+import { Dialog, EmptyState, Spinner } from "./ui";
 import { useWorkspace, type Notice } from "./useWorkspace";
 
 type Tab = "guests" | "photos" | "review" | "deliver";
@@ -93,15 +91,29 @@ export function Workspace(props: WorkspaceProps) {
     }
   }
 
+  function openNewEvent() {
+    ws.dismissNotice();
+    setNewEventName("");
+    setIsCreating(true);
+  }
+
   const nextStep = (() => {
     if (!showViews) {
       return null;
     }
     if (library.people.length === 0 && tab !== "guests") {
-      return { label: "Add a guest", target: "guests" as Tab, text: "Start by adding a guest with reference photos." };
+      return {
+        label: "Add a guest",
+        target: "guests" as Tab,
+        text: "Start by adding a guest with reference photos.",
+      };
     }
     if (library.people.length > 0 && library.photos.length === 0 && tab !== "photos") {
-      return { label: "Upload photos", target: "photos" as Tab, text: "Next, upload event photos to match against your guests." };
+      return {
+        label: "Upload photos",
+        target: "photos" as Tab,
+        text: "Next, upload event photos to match against your guests.",
+      };
     }
     if (pending > 0 && tab !== "review") {
       return {
@@ -111,7 +123,11 @@ export function Workspace(props: WorkspaceProps) {
       };
     }
     if (pending === 0 && approvedPairs > 0 && tab !== "deliver") {
-      return { label: "Open Deliver", target: "deliver" as Tab, text: "Approved matches are ready to export as a photo list." };
+      return {
+        label: "Open Deliver",
+        target: "deliver" as Tab,
+        text: "Approved matches are ready to export as a photo list.",
+      };
     }
     return null;
   })();
@@ -127,10 +143,57 @@ export function Workspace(props: WorkspaceProps) {
           <Link className="wordmark" href="/">
             FaceID Events
           </Link>
+          <div className="event-bar">
+            <label className="visually-hidden" htmlFor="event-select">
+              Event
+            </label>
+            <select
+              className="event-select"
+              disabled={ws.isBusy || ws.events.length === 0}
+              id="event-select"
+              onChange={(event) => ws.selectEvent(event.target.value)}
+              value={ws.activeEventId}
+            >
+              {ws.events.length === 0 && <option value="">Your events</option>}
+              {ws.events.map((event) => (
+                <option key={event.id} value={event.id}>
+                  {event.name}
+                </option>
+              ))}
+            </select>
+            <button
+              aria-label="Create a new event"
+              className="button button-icon button-ghost"
+              disabled={ws.isBusy}
+              onClick={openNewEvent}
+              title="New event"
+              type="button"
+            >
+              <Plus aria-hidden="true" size={19} />
+            </button>
+            {showViews && (
+              <button
+                aria-label="Refresh event"
+                className="button button-icon button-ghost"
+                disabled={ws.isBusy}
+                onClick={ws.refresh}
+                title="Refresh event"
+                type="button"
+              >
+                <RefreshCw
+                  aria-hidden="true"
+                  className={library.status === "loading" ? "spin" : undefined}
+                  size={17}
+                />
+              </button>
+            )}
+          </div>
           <div className="account">
             {props.mode === "live" ? (
               <>
-                {props.accountEmail && <span className="account-email truncate">{props.accountEmail}</span>}
+                {props.accountEmail && (
+                  <span className="account-email truncate">{props.accountEmail}</span>
+                )}
                 <button className="button button-compact" onClick={props.onSignOut} type="button">
                   <LogOut aria-hidden="true" size={16} />
                   Sign out
@@ -147,77 +210,72 @@ export function Workspace(props: WorkspaceProps) {
           </div>
         </div>
 
-        <div className="event-bar">
-          <label className="event-label" htmlFor="event-select">
-            Event
-          </label>
-          <select
-            className="event-select"
-            disabled={ws.isBusy || ws.events.length === 0}
-            id="event-select"
-            onChange={(event) => ws.selectEvent(event.target.value)}
-            value={ws.activeEventId}
-          >
-            {ws.events.map((event) => (
-              <option key={event.id} value={event.id}>
-                {event.name}
-              </option>
-            ))}
-          </select>
-          <button
-            aria-expanded={isCreating}
-            className="button button-compact"
-            disabled={ws.isBusy}
-            onClick={() => setIsCreating((open) => !open)}
-            type="button"
-          >
-            <Plus aria-hidden="true" size={16} />
-            New event
-          </button>
-        </div>
-
         {isCreating && (
-          <form className="new-event" onSubmit={(event) => void submitNewEvent(event)}>
-            <label className="visually-hidden" htmlFor="new-event-name">
-              New event name
-            </label>
-            <input
-              autoComplete="off"
-              autoFocus
-              id="new-event-name"
-              maxLength={80}
-              onChange={(event) => setNewEventName(event.target.value)}
-              placeholder="Event name, e.g. Harper wedding"
-              value={newEventName}
-            />
-            <button className="button button-primary" disabled={ws.isBusy} type="submit">
-              Create
-            </button>
-            <button
-              className="button"
-              onClick={() => {
-                setIsCreating(false);
-                setNewEventName("");
-              }}
-              type="button"
-            >
-              Cancel
-            </button>
-          </form>
+          <Dialog busy={ws.isBusy} onClose={() => setIsCreating(false)} title="Create an event">
+            <form className="new-event" onSubmit={(event) => void submitNewEvent(event)}>
+              <label className="label" htmlFor="new-event-name">
+                Event name
+              </label>
+              <input
+                autoComplete="off"
+                data-initial-focus
+                id="new-event-name"
+                maxLength={80}
+                disabled={ws.isBusy}
+                onChange={(event) => setNewEventName(event.target.value)}
+                placeholder="e.g. Harper wedding"
+                required
+                value={newEventName}
+              />
+              {ws.notice?.tone === "error" && (
+                <p className="field-error" role="alert">
+                  {ws.notice.text}
+                </p>
+              )}
+              <div className="dialog-actions">
+                <button
+                  className="button"
+                  disabled={ws.isBusy}
+                  onClick={() => {
+                    setIsCreating(false);
+                    setNewEventName("");
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button className="button button-primary" disabled={ws.isBusy} type="submit">
+                  <Plus aria-hidden="true" size={17} /> {ws.isBusy ? "Creating..." : "Create event"}
+                </button>
+              </div>
+            </form>
+          </Dialog>
         )}
       </header>
 
       {isDemo && (
         <div className="demo-banner">
-          <p>
-            <strong>Sample workspace.</strong> Matching here is simulated: names, photos and scores
-            are examples, and no face analysis runs. Your uploads stay in this browser, and your changes
-            disappear when you leave or reload this page.
-          </p>
+          <details className="demo-details">
+            <summary>
+              Sample workspace <span>Simulated matches, saved only in this tab</span>
+              <ChevronDown aria-hidden="true" size={15} />
+            </summary>
+            <p>
+              Names, photos and scores are examples; no face analysis runs. Your uploads stay in
+              this browser. Changes disappear when you leave or reload. Guest invitation links are
+              available in live events.
+            </p>
+          </details>
           <div className="demo-banner-actions">
-            <button className="button button-compact" disabled={ws.isBusy} onClick={ws.resetSample} type="button">
+            <button
+              aria-label="Reset sample workspace"
+              className="button button-icon button-ghost"
+              disabled={ws.isBusy}
+              onClick={ws.resetSample}
+              title="Reset sample"
+              type="button"
+            >
               <RotateCcw aria-hidden="true" size={16} />
-              Reset sample
             </button>
             <Link className="text-link" href="/app">
               Start a real event
@@ -241,7 +299,10 @@ export function Workspace(props: WorkspaceProps) {
                 <span aria-hidden="true" className="count">
                   {pending}
                 </span>
-                <span className="visually-hidden"> ({pending} pending {pending === 1 ? "decision" : "decisions"})</span>
+                <span className="visually-hidden">
+                  {" "}
+                  ({pending} pending {pending === 1 ? "decision" : "decisions"})
+                </span>
               </>
             )}
           </button>
@@ -250,10 +311,14 @@ export function Workspace(props: WorkspaceProps) {
 
       <div className="notices">
         <div aria-live="polite" role="status">
-          {ws.notice && ws.notice.tone !== "error" && <NoticeBox notice={ws.notice} onDismiss={ws.dismissNotice} />}
+          {ws.notice && ws.notice.tone !== "error" && (
+            <NoticeBox notice={ws.notice} onDismiss={ws.dismissNotice} />
+          )}
         </div>
         <div role="alert">
-          {ws.notice && ws.notice.tone === "error" && <NoticeBox notice={ws.notice} onDismiss={ws.dismissNotice} />}
+          {ws.notice && ws.notice.tone === "error" && (
+            <NoticeBox notice={ws.notice} onDismiss={ws.dismissNotice} />
+          )}
         </div>
       </div>
 
@@ -284,7 +349,7 @@ export function Workspace(props: WorkspaceProps) {
           <div className="state-block">
             <EmptyState
               action={
-                <button className="button button-primary" onClick={() => setIsCreating(true)} type="button">
+                <button className="button button-primary" onClick={openNewEvent} type="button">
                   Create an event
                 </button>
               }
@@ -297,25 +362,6 @@ export function Workspace(props: WorkspaceProps) {
 
         {ws.eventsState.status === "ready" && ws.events.length > 0 && (
           <>
-            <div className="event-summary">
-              <h1 className="event-title truncate">{activeEvent?.name ?? "Event"}</h1>
-              {showViews && (
-                <p className="meta">
-                  {pluralize(library.people.length, "guest")} ·{" "}
-                  {pluralize(library.photos.length, "photo")} · {pending} awaiting review
-                </p>
-              )}
-              {isShowingActiveEvent && library.status === "loading" && showViews && (
-                <Spinner label="Refreshing…" />
-              )}
-              {showViews && (
-                <button className="text-button" disabled={ws.isBusy} onClick={ws.refresh} type="button">
-                  <RefreshCw aria-hidden="true" size={15} />
-                  Refresh
-                </button>
-              )}
-            </div>
-
             {isShowingActiveEvent && library.status === "loading" && !showViews && (
               <div className="state-block">
                 <Spinner label="Loading this event…" />
@@ -338,19 +384,6 @@ export function Workspace(props: WorkspaceProps) {
               </div>
             )}
 
-            {showViews && nextStep && (
-              <div className="next-step">
-                <p>{nextStep.text}</p>
-                <button
-                  className="button button-primary"
-                  onClick={() => setTab(nextStep.target)}
-                  type="button"
-                >
-                  {nextStep.label}
-                </button>
-              </div>
-            )}
-
             {showViews && tab === "guests" && (
               <GuestsView
                 isBusy={ws.isBusy}
@@ -358,8 +391,10 @@ export function Workspace(props: WorkspaceProps) {
                 onAddGuest={ws.addGuest}
                 onDeleteGuest={(person) => void ws.deleteGuest(person)}
                 onGetIntakeLink={getIntakeLink ? () => getIntakeLink(ws.activeEventId) : undefined}
+                onRefresh={ws.refresh}
                 people={library.people}
                 stats={stats}
+                submissionError={ws.notice?.tone === "error" ? ws.notice.text : undefined}
               />
             )}
 
@@ -409,6 +444,19 @@ export function Workspace(props: WorkspaceProps) {
                 photos={library.photos}
               />
             )}
+            {showViews && nextStep && (
+              <div className="next-step">
+                <p>{nextStep.text}</p>
+                <button
+                  className="text-button"
+                  onClick={() => setTab(nextStep.target)}
+                  type="button"
+                >
+                  {nextStep.label}
+                  <ArrowRight aria-hidden="true" size={17} />
+                </button>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -429,7 +477,12 @@ function NoticeBox({ notice, onDismiss }: { notice: Notice; onDismiss: () => voi
           {notice.action.label}
         </button>
       )}
-      <button aria-label="Dismiss message" className="button button-icon" onClick={onDismiss} type="button">
+      <button
+        aria-label="Dismiss message"
+        className="button button-icon"
+        onClick={onDismiss}
+        type="button"
+      >
         <X aria-hidden="true" size={18} />
       </button>
     </div>

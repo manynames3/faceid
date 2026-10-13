@@ -1,5 +1,5 @@
-import { Loader2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Loader2, X } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
 import { statusLabel } from "./library";
 import type { MatchStatus, Person } from "./types";
 import { useModalDialog } from "./useModalDialog";
@@ -27,7 +27,11 @@ export function PhotoImage({
 
   if (failedSrc === src) {
     return (
-      <div className={`image-fallback ${className ?? ""}`} role="img" aria-label={`${alt} (unavailable)`}>
+      <div
+        className={`image-fallback ${className ?? ""}`}
+        role="img"
+        aria-label={`${alt} (unavailable)`}
+      >
         <span>Image unavailable</span>
         {onReload && (
           <button
@@ -59,7 +63,13 @@ export function PhotoImage({
   );
 }
 
-export function Avatar({ person, size = "md" }: { person: Pick<Person, "initials" | "name" | "referencePreviewUrl">; size?: "md" | "lg" }) {
+export function Avatar({
+  person,
+  size = "md",
+}: {
+  person: Pick<Person, "initials" | "name" | "referencePreviewUrl">;
+  size?: "md" | "lg";
+}) {
   return (
     <span className={`avatar avatar-${size}`}>
       {person.referencePreviewUrl ? (
@@ -72,8 +82,7 @@ export function Avatar({ person, size = "md" }: { person: Pick<Person, "initials
 }
 
 export function StatusBadge({ status }: { status: MatchStatus }) {
-  const tone =
-    status === "approved" ? "approved" : status === "rejected" ? "rejected" : "pending";
+  const tone = status === "approved" ? "approved" : status === "rejected" ? "rejected" : "pending";
   return <span className={`badge badge-${tone}`}>{statusLabel(status)}</span>;
 }
 
@@ -101,6 +110,47 @@ export function Spinner({ label }: { label?: string }) {
       <Loader2 aria-hidden="true" className="spin" size={16} />
       {label && <span>{label}</span>}
     </span>
+  );
+}
+
+export function Dialog({
+  children,
+  title,
+  onClose,
+  busy = false,
+}: {
+  children: ReactNode;
+  title: string;
+  onClose: () => void;
+  busy?: boolean;
+}) {
+  const ref = useModalDialog();
+  const titleId = useId();
+  return (
+    <dialog
+      aria-labelledby={titleId}
+      className="dialog workspace-dialog"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!busy) onClose();
+      }}
+      ref={ref}
+    >
+      <header className="workspace-dialog-header">
+        <h2 id={titleId}>{title}</h2>
+        <button
+          aria-label="Close dialog"
+          className="button button-icon button-ghost"
+          disabled={busy}
+          onClick={onClose}
+          title="Close"
+          type="button"
+        >
+          <X aria-hidden="true" size={20} />
+        </button>
+      </header>
+      <div className="workspace-dialog-body">{children}</div>
+    </dialog>
   );
 }
 

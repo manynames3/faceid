@@ -1,11 +1,4 @@
-import {
-  AlertTriangle,
-  CheckCircle2,
-  CircleDashed,
-  Clock,
-  ImagePlus,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Clock, ImagePlus, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { Inspector } from "./Inspector";
 import { formatScore, pluralize } from "./format";
@@ -14,7 +7,7 @@ import type { DecisionStatus, Person, PhotoAsset } from "./types";
 import { ACCEPT_ATTRIBUTE, formatBytes, isRetryableUpload, MAX_UPLOAD_BYTES } from "./uploads";
 import type { RejectedFile } from "./uploads";
 import type { QueueItem } from "./useWorkspace";
-import { ConfirmDialog, EmptyState, PhotoImage, Spinner, StatusBadge } from "./ui";
+import { ConfirmDialog, Dialog, EmptyState, PhotoImage, Spinner, StatusBadge } from "./ui";
 
 const pageSize = 24;
 const noMatchFilter = "__none__";
@@ -81,6 +74,7 @@ export function PhotosView({
   const [query, setQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(pageSize);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [inspectorKey, setInspectorKey] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PhotoAsset | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,7 +91,9 @@ export function PhotosView({
       if (
         guestFilter !== "all" &&
         guestFilter !== noMatchFilter &&
-        !photo.matches.some((match) => match.personId === guestFilter && match.status !== "rejected")
+        !photo.matches.some(
+          (match) => match.personId === guestFilter && match.status !== "rejected",
+        )
       ) {
         return false;
       }
@@ -115,6 +111,7 @@ export function PhotosView({
   function pick(list: FileList | null) {
     if (list && list.length > 0) {
       onUpload(Array.from(list));
+      setUploadOpen(false);
     }
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -126,6 +123,7 @@ export function PhotosView({
     setIsDragging(false);
     if (hasGuests && !isBusy) {
       onUpload(Array.from(event.dataTransfer.files));
+      setUploadOpen(false);
     }
   }
 
@@ -136,67 +134,84 @@ export function PhotosView({
 
   return (
     <div className="view photos-view">
-      <section aria-labelledby="upload-title" className="panel">
-        <h2 className="panel-title" id="upload-title">
-          Upload event photos
-        </h2>
-
-        {hasGuests ? (
-          <div
-            className={isDragging ? "dropzone dropzone-active" : "dropzone"}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                setIsDragging(false);
-              }
-            }}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={handleDrop}
-          >
-            <ImagePlus aria-hidden="true" size={26} />
-            <p>Drag event photos here, or</p>
-            <input
-              accept={ACCEPT_ATTRIBUTE}
-              aria-hidden="true"
-              className="visually-hidden"
-              disabled={isBusy}
-              id="photo-files"
-              multiple
-              onChange={(event) => pick(event.target.files)}
-              ref={inputRef}
-              tabIndex={-1}
-              type="file"
-            />
-            <button
-              className="button button-primary"
-              disabled={isBusy}
-              onClick={() => inputRef.current?.click()}
-              type="button"
+      <div className="view-heading">
+        <div>
+          <h1>Event photos</h1>
+          <p className="view-subtitle">{pluralize(photos.length, "photo")} in this event</p>
+        </div>
+        <button
+          className="button button-primary"
+          disabled={isBusy}
+          onClick={() => (hasGuests ? setUploadOpen(true) : onGoToGuests())}
+          type="button"
+        >
+          <ImagePlus aria-hidden="true" size={18} />{" "}
+          {hasGuests ? "Upload photos" : "Add a guest first"}
+        </button>
+      </div>
+      {uploadOpen && (
+        <Dialog
+          onClose={() => {
+            setUploadOpen(false);
+            setIsDragging(false);
+          }}
+          title="Upload event photos"
+        >
+          {hasGuests ? (
+            <div
+              className={isDragging ? "dropzone dropzone-active" : "dropzone"}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setIsDragging(false);
+                }
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleDrop}
             >
-              Choose photos
-            </button>
-            <p className="hint">
-              JPEG or PNG, up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB each. Photos are sent one at a
-              time, and each is checked against {pluralize(people.length, "guest")}.
-            </p>
-          </div>
-        ) : (
-          <EmptyState
-            action={
-              <button className="button button-primary" onClick={onGoToGuests} type="button">
-                Add a guest
+              <ImagePlus aria-hidden="true" size={26} />
+              <p>Drag event photos here, or</p>
+              <input
+                accept={ACCEPT_ATTRIBUTE}
+                aria-hidden="true"
+                className="visually-hidden"
+                disabled={isBusy}
+                id="photo-files"
+                multiple
+                onChange={(event) => pick(event.target.files)}
+                ref={inputRef}
+                tabIndex={-1}
+                type="file"
+              />
+              <button
+                data-initial-focus
+                className="button button-primary"
+                disabled={isBusy}
+                onClick={() => inputRef.current?.click()}
+                type="button"
+              >
+                Choose photos
               </button>
-            }
-            title="Add a guest first"
-          >
-            Photos can only match guests who already have reference photos. Add at least one guest,
-            then come back to upload.
-          </EmptyState>
-        )}
-      </section>
+              <p className="hint">JPEG or PNG, up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB each.</p>
+            </div>
+          ) : (
+            <EmptyState
+              action={
+                <button className="button button-primary" onClick={onGoToGuests} type="button">
+                  Add a guest
+                </button>
+              }
+              title="Add a guest first"
+            >
+              Photos can only match guests who already have reference photos. Add at least one
+              guest, then come back to upload.
+            </EmptyState>
+          )}
+        </Dialog>
+      )}
 
       {rejected.length > 0 && (
         <section aria-label="Files that weren't uploaded" className="panel panel-warn">
@@ -217,7 +232,7 @@ export function PhotosView({
       )}
 
       {queue.length > 0 && (
-        <section aria-label="Upload progress" className="panel">
+        <section aria-label="Upload progress" className="upload-progress">
           <div className="panel-head">
             <h3>
               {doneCount} of {queue.length} photos done
@@ -258,8 +273,8 @@ export function PhotosView({
 
       <section aria-labelledby="gallery-title" className="section">
         <div className="section-head">
-          <h2 className="section-title" id="gallery-title">
-            Event photos <span className="muted">{photos.length}</span>
+          <h2 className="visually-hidden" id="gallery-title">
+            Photo library
           </h2>
           {photos.length > 0 && (
             <div className="filters">
@@ -337,6 +352,7 @@ export function PhotosView({
                           className="button button-icon button-quiet-danger"
                           disabled={isBusy}
                           onClick={() => setPendingDelete(photo)}
+                          title="Delete photo"
                           type="button"
                         >
                           <Trash2 aria-hidden="true" size={17} />
