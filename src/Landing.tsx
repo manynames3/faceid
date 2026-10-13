@@ -6,21 +6,18 @@ import { samplePortraits } from "./mockData";
 const sheet = [
   {
     ...samplePortraits.noah,
-    caption: "arrivals-0412.jpg",
     guest: "Noah Kim",
     score: "91.7%",
     status: "Awaiting your decision",
   },
   {
     ...samplePortraits.ava,
-    caption: "garden-0022.jpg",
     guest: "Ava Morales",
     score: "84.6%",
     status: "Needs a closer look",
   },
   {
     ...samplePortraits.maya,
-    caption: "stage-portrait-0118.jpg",
     guest: "Maya Johnson",
     score: "96.2%",
     status: "Awaiting your decision",
@@ -270,7 +267,7 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
                       <span>
                         Score {photo.score} · {photo.status}
                       </span>
-                      <span className="sheet-file">{photo.caption}</span>
+                      <span className="sheet-file">{photo.filename}</span>
                     </span>
                   </Link>
                 </li>

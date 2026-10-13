@@ -4,15 +4,18 @@ import type { EventWorkspace, Person, PhotoAsset } from "./types";
 export const samplePortraits = {
   ava: {
     alt: "Portrait of a woman with long brown hair in a striped shirt, outdoors at dusk",
+    filename: "sample-ava.jpg",
     src: "/images/sample-ava.jpg",
   },
   maya: {
     alt: "Portrait of a laughing woman with dark wavy hair in a red top",
+    filename: "sample-maya.jpg",
     src: "/images/sample-maya.jpg",
   },
   noah: {
-    alt: "Portrait of a smiling man with dark hair in a grey sweater against a grey background",
-    src: "/images/sample-noah.jpg",
+    alt: "Portrait of a smiling man with short dark hair in a charcoal jacket at an outdoor reception",
+    filename: "sample-noah-reception.jpg",
+    src: "/images/sample-noah-reception.jpg",
   },
 };
 
@@ -73,7 +76,7 @@ export function createSampleData(): SampleData {
     photos: [
       {
         id: "photo-sample-garden",
-        name: "garden-0022.jpg",
+        name: samplePortraits.ava.filename,
         size: 0,
         uploadedAt: new Date(now - 1000 * 60 * 14).toISOString(),
         previewUrl: samplePortraits.ava.src,
@@ -88,7 +91,7 @@ export function createSampleData(): SampleData {
       },
       {
         id: "photo-sample-stage",
-        name: "stage-portrait-0118.jpg",
+        name: samplePortraits.maya.filename,
         size: 0,
         uploadedAt: new Date(now - 1000 * 60 * 33).toISOString(),
         previewUrl: samplePortraits.maya.src,
@@ -103,7 +106,7 @@ export function createSampleData(): SampleData {
       },
       {
         id: "photo-sample-arrivals",
-        name: "arrivals-0412.jpg",
+        name: samplePortraits.noah.filename,
         size: 0,
         uploadedAt: new Date(now - 1000 * 60 * 55).toISOString(),
         previewUrl: samplePortraits.noah.src,
