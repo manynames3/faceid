@@ -1,28 +1,6 @@
 import { ArrowRight, ChevronDown, Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "./Link";
-import { samplePortraits } from "./mockData";
-
-const sheet = [
-  {
-    ...samplePortraits.noah,
-    guest: "Noah Kim",
-    score: "91.7%",
-    status: "Awaiting your decision",
-  },
-  {
-    ...samplePortraits.ava,
-    guest: "Ava Morales",
-    score: "84.6%",
-    status: "Needs a closer look",
-  },
-  {
-    ...samplePortraits.maya,
-    guest: "Maya Johnson",
-    score: "96.2%",
-    status: "Awaiting your decision",
-  },
-];
 
 const steps = [
   {
@@ -34,8 +12,8 @@ const steps = [
     body: "Drop in your JPEG or PNG frames. Compare each suggested match with the guest's reference, then approve or reject it. You keep the final say.",
   },
   {
-    title: "Hand off approved photo lists",
-    body: "Export a CSV or copy each guest's filenames. Use the lists with your existing delivery process. Pending and rejected matches stay out.",
+    title: "Send each guest their own gallery",
+    body: "Create a private link for each guest's approved photos. They can view and download without an account. Export filenames if you already use another gallery service.",
   },
 ];
 
@@ -81,7 +59,11 @@ const faqs = [
   },
   {
     q: "How do guests get their photos?",
-    a: "You export the approved matches as a CSV, or copy the filenames guest by guest, and deliver through your existing process. FaceID Events doesn't host guest galleries or create download links.",
+    a: "In Deliver, create a private gallery link for a guest and send it through your usual email or messaging app. They can view and download approved photos without an account. Links last seven days and can be replaced or turned off. FaceID doesn't send delivery emails. Filename exports still work with your existing gallery service.",
+  },
+  {
+    q: "What if matching misses someone?",
+    a: "Add a guest to a photo yourself after checking their reference. That records a manual decision without inventing a matching score. After adding a guest or a better second reference, use Find in photos to check selected existing photos. Earlier approvals and rejections stay as they are.",
   },
   {
     q: "How accurate is the matching?",
@@ -90,6 +72,10 @@ const faqs = [
   {
     q: "What files can I use?",
     a: "JPEG and PNG, up to 15 MB each. Start with a small event: the default matching limit is 50 guests. Use one or two clear reference photos per guest, including a front-facing shot; only the first two are used for matching.",
+  },
+  {
+    q: "Who can use the guest signup link?",
+    a: "Anyone with the invitation link can submit references while signup is open. Share it only with invited guests. You can close signup in Event details; reopening creates a new link and invalidates the old one. Guests see your host name and contact email, not your guest list or event photos.",
   },
   {
     q: "Can I remove someone?",
@@ -178,16 +164,16 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
             <p className="eyebrow eyebrow-light">For event photographers and private hosts</p>
             <h1 id="hero-title">Event photos, sorted by guest.</h1>
             <p className="hero-lede">
-              Spend less of the evening sorting your shoot. Find possible matches, check the
-              faces, and hand off each guest's approved photo list.
+              For every guest who asks, "Did you get any of us?" Find possible matches,
+              check each face, and send a private gallery of their approved photos.
             </p>
             <div className="hero-actions">
-              <Link className="button button-primary button-large" href="/app">
-                Start an event
+              <Link className="button button-primary button-large" href="/demo">
+                Try a sample event
                 <ArrowRight aria-hidden="true" size={18} />
               </Link>
-              <Link className="button button-light button-large" href="/demo">
-                Open the sample workspace
+              <Link className="button button-light button-large" href="/app">
+                {accountLabel}
               </Link>
             </div>
             <p className="hero-note">
@@ -220,8 +206,8 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
                 and you can correct a decision later.
               </li>
               <li>
-                <strong>Hand off a list, not a folder dump.</strong> Get the approved photos per
-                guest, ready for the way you already deliver.
+                <strong>A personal set for every guest.</strong> Send a private gallery link
+                with only their approved photos, ready to view and download.
               </li>
             </ul>
           </div>
@@ -230,7 +216,7 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
         <section aria-labelledby="workflow-title" className="band band-tint" id="workflow">
           <div className="wrap">
             <p className="eyebrow">Workflow</p>
-            <h2 id="workflow-title">Three steps from shoot to guest list</h2>
+            <h2 id="workflow-title">From a full shoot to their favorite moments.</h2>
             <ol className="steps">
               {steps.map((step, index) => (
                 <li key={step.title}>
@@ -248,31 +234,15 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
         <section aria-labelledby="workspace-title" className="band" id="workspace">
           <div className="wrap">
             <p className="eyebrow">Inside the workspace</p>
-            <h2 id="workspace-title">One tab for each job: Guests, Photos, Review, Deliver</h2>
+            <h2 id="workspace-title">The suggestion is ours. The final say is yours.</h2>
             <p className="section-lede">
-              This is the sample workspace. Every name and score below is simulated, so you can see
-              how review works without an account.
+              See the event photo beside the guest's reference. Check the face, make your decision,
+              and move to the next one. No automatic approvals.
             </p>
-
-            <ul aria-label="Sample contact sheet" className="contact-sheet">
-              {sheet.map((photo) => (
-                <li key={photo.src}>
-                  <Link href="/demo">
-                    <span className="sheet-frame">
-                      <img alt={photo.alt} decoding="async" loading="lazy" src={photo.src} />
-                      <span className="sheet-flag">Simulated</span>
-                    </span>
-                    <span className="sheet-caption">
-                      <strong>{photo.guest}</strong>
-                      <span>
-                        Score {photo.score} · {photo.status}
-                      </span>
-                      <span className="sheet-file">{photo.filename}</span>
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <figure className="product-tour">
+              <Link href="/demo"><img alt="FaceID review workspace showing a group event photo beside Noah's reference, with Approve and Reject controls" decoding="async" height={850} loading="lazy" src="/images/review-workspace.jpg" width={1440} /></Link>
+              <figcaption><span>Actual workspace. Fictional guests and simulated matching, not an accuracy demonstration.</span><Link href="/demo">Try this event <ArrowRight aria-hidden="true" size={14} /></Link></figcaption>
+            </figure>
 
             <dl className="tab-notes">
               <div>
@@ -289,14 +259,11 @@ export function Landing({ signedIn }: { signedIn: boolean }) {
               </div>
               <div>
                 <dt>Deliver</dt>
-                <dd>Export approved matches as a CSV or copy filenames, guest by guest.</dd>
+                <dd>Share private guest galleries, download originals or export approved filenames.</dd>
               </div>
             </dl>
 
-            <Link className="button button-primary" href="/demo">
-              Open the sample workspace
-              <ArrowRight aria-hidden="true" size={18} />
-            </Link>
+            <div className="actions"><Link className="button button-primary" href="/demo">Try a sample event <ArrowRight aria-hidden="true" size={18} /></Link><Link className="button" href="/demo/guest">Guest signup</Link><Link className="button" href="/demo/gallery">Guest gallery</Link></div>
           </div>
         </section>
 

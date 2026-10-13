@@ -4,6 +4,7 @@ import { formatDate, formatScore } from "./format";
 import type { InspectorItem, ReviewEntry } from "./library";
 import type { DecisionStatus } from "./types";
 import { PhotoImage, StatusBadge } from "./ui";
+import { MatchedPhoto } from "./MatchedPhoto";
 import { useModalDialog } from "./useModalDialog";
 
 type ReviewHandler = (entry: ReviewEntry, status: DecisionStatus) => void;
@@ -199,10 +200,9 @@ export function Inspector({
 
       <div className="inspector-body">
         <div className="inspector-photo">
-          <PhotoImage
+          <MatchedPhoto
             alt={imageAlt}
-            className="inspector-image"
-            eager
+            faceBox={entry?.match.faceBox}
             key={item.key}
             onReload={onReloadImages}
             src={photo.previewUrl}
@@ -215,8 +215,8 @@ export function Inspector({
               <h3 className="truncate">{entry.match.personName}</h3>
               <dl className="facts">
                 <div>
-                  <dt>{isDemo ? "Sample score" : "Matching score"}</dt>
-                  <dd>{formatScore(entry.match.confidence)}</dd>
+                  <dt>{entry.match.source === "manual" ? "Added by" : isDemo ? "Sample score" : "Matching score"}</dt>
+                  <dd>{entry.match.source === "manual" ? "You" : formatScore(entry.match.confidence)}</dd>
                 </div>
                 <div>
                   <dt>Status</dt>
@@ -232,7 +232,7 @@ export function Inspector({
                 )}
               </dl>
               <p className="hint">
-                {isDemo
+                {entry.match.source === "manual" ? "You confirmed this guest is in the photo. No face-matching score was recorded." : isDemo
                   ? "This is a simulated result. No face analysis has been run."
                   : "The score comes from the face matcher. It is an estimate, not certainty, so compare the faces yourself before approving."}
               </p>

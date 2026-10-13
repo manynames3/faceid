@@ -1,5 +1,5 @@
 import { Loader2, X } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode, type ReactEventHandler } from "react";
 import { statusLabel } from "./library";
 import type { MatchStatus, Person } from "./types";
 import { useModalDialog } from "./useModalDialog";
@@ -13,12 +13,16 @@ export function PhotoImage({
   alt,
   className,
   eager = false,
+  onLoad,
+  onError,
   onReload,
   src,
 }: {
   alt: string;
   className?: string;
   eager?: boolean;
+  onLoad?: ReactEventHandler<HTMLImageElement>;
+  onError?: ReactEventHandler<HTMLImageElement>;
   onReload?: () => void;
   src: string;
 }) {
@@ -57,7 +61,8 @@ export function PhotoImage({
       decoding="async"
       key={attempt}
       loading={eager ? "eager" : "lazy"}
-      onError={() => setFailedSrc(src)}
+      onError={(event) => { setFailedSrc(src); onError?.(event); }}
+      onLoad={onLoad}
       src={src}
     />
   );

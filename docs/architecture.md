@@ -1,6 +1,6 @@
 # Architecture
 
-FaceID is split into a static frontend and an AWS serverless backend. The public homepage and explicit `/demo` sample work independently of the backend; sample uploads and decisions stay in browser memory. The real `/app` workspace requires both API and Cognito configuration. Signed-in users create events, upload consent-attested guest references and event photos directly to S3, and record human review decisions for face-match candidates. Lambda verifies upload sessions and S3 object metadata, then coordinates Rekognition and DynamoDB updates for the authenticated user and selected event.
+FaceID is split into a static frontend and an AWS serverless backend. The public homepage and explicit `/demo`, `/demo/guest` and `/demo/gallery` samples work independently of the backend; sample uploads and decisions stay in browser memory. The real `/app` workspace requires both API and Cognito configuration. Signed-in users create events, upload consent-attested guest references and event photos directly to S3, and record human review decisions for face-match candidates. Lambda verifies upload sessions and S3 object metadata, then coordinates Rekognition and DynamoDB updates for the authenticated user and selected event.
 
 ## C4-Style Container Diagram
 
@@ -23,10 +23,11 @@ flowchart LR
   pages -->|"Authorization Code + PKCE"| cognito
   cognito -->|"ID token"| pages
   user -->|"Drag/drop images"| pages
-  pages -->|"Bearer JWT<br/>GET /events, /library<br/>POST /events, /uploads/*<br/>PATCH /matches/*<br/>DELETE /photos/*, /people/*"| api
-  pages -->|"Event capability<br/>GET /guest-intake<br/>POST /guest-intake/presign, /process"| api
+  pages -->|"Bearer JWT<br/>GET /events, /library<br/>POST /events, /uploads/*<br/>POST /photos/*/guests, /rematch<br/>POST, DELETE /people/*/gallery-link<br/>PATCH /events/*, /matches/*<br/>GET /photos/*/download<br/>DELETE /photos/*, /people/*"| api
+  pages -->|"Event capability<br/>GET /guest-intake<br/>POST /guest-intake/presign, /process, /status"| api
+  pages -->|"Guest gallery capability<br/>GET /guest-gallery, /guest-gallery/photos/*/download"| api
   api --> lambda
-  pages -->|"Presigned PUT image upload"| s3
+  pages -->|"Presigned PUT uploads / GET originals"| s3
   lambda -->|"Owner-scoped PUT/GET/DELETE keys<br/>HeadObject verification"| s3
   api -->|"Validates issuer + audience"| cognito
   lambda -->|"Index, compare, delete faces"| rekognition
@@ -57,11 +58,19 @@ flowchart LR
 17. Lambda writes owner/event-scoped photo and match metadata to DynamoDB and returns preview URLs and match states.
 18. Reviewers approve or reject match candidates through `PATCH /matches/{photoId}/{personId}` and can change decisions through that same route. The browser exports approved-only filename/identifier lists without signed URLs.
 19. For photo deletes, Lambda verifies ownership, removes the S3 object, deletes photo and match rows, and decrements affected people counters.
-20. For person deletes, Lambda verifies ownership, removes reference S3 objects, deletes Rekognition face IDs, deletes related match rows, and decrements affected photo counters.
+20. For person deletes, Lambda verifies ownership and marks removal pending, disabling gallery access and new references/matches before removing S3 references, Rekognition face IDs and related match rows. Failed cleanup retains the marker for retry; counter updates cannot recreate deleted records.
 21. Lambda emits structured request logs; API Gateway emits JSON access logs.
 22. CloudWatch alarms track Lambda errors, Lambda throttles, and API 5xx responses.
 
-Guest signup is a separate path: an authenticated owner obtains `/events/{event_id}/intake-link`. Its `/guest?eventId=...&token=...` URL contains an HMAC capability scoped to that event. Public guest routes validate the capability and return only the event name/ID; they never expose the owner's library. Guest uploads are references only, with names bound to upload sessions and consent recorded as `guest_submitted`. The host's review/delivery flow remains JWT-protected.
+Guest signup is a separate path: an authenticated owner obtains `/events/{event_id}/intake-link`. Its `/guest?eventId=...&token=...` URL contains an HMAC capability scoped to that event. Public guest routes validate the capability and return only the event name/ID, host name, contact email and signup state; they never expose the owner's library. Guest uploads are references only, with names bound to upload sessions and consent recorded as `guest_submitted`. The host's review/delivery flow remains JWT-protected.
+
+Guest submission recovery uses issued upload IDs stored in the browser tab and `POST /guest-intake/status`. Consistent reads reconcile saved references without repeating Rekognition calls. An uncertain result blocks another submission; the host must resolve cases where the receipt expires or processing never finishes. `/demo/guest` previews the experience without contacting AWS.
+
+New match records preserve the highest-scoring face bounding box. The client maps normalized coordinates onto the uncropped image at its rendered size, including letterboxing; older records work without an outline.
+
+Guest gallery delivery queries the existing person-match index and consistently rereads matches/photos before exposing approved images. Each original download rechecks capability, expiry, consent, owner/event scope and approval; issued image URLs last five minutes. Disabling/replacing a capability stops future requests but cannot recall downloaded copies.
+
+Manual assignment writes an approved match and its counters in a conditional transaction without a confidence score. Rematching is explicit and bounded to one guest/photo per request, using TTL-backed operation records for replay protection. Existing approved/rejected decisions are never replaced by automatic suggestions. The browser checks up to 50 selected photos sequentially; progress is local and there is no durable worker queue.
 
 ## Deployment Shape
 
@@ -74,7 +83,7 @@ Guest signup is a separate path: an authenticated owner obtains `/events/{event_
 ## Key Constraints
 
 - The hosted demo can operate without AWS by using mock data.
-- Owner API routes require a Cognito JWT. The three guest routes have no JWT authorizer and instead verify an event-specific HMAC capability in Lambda.
+- Owner API routes require a Cognito JWT. The guest intake and gallery routes have no JWT authorizer and instead verify an event-specific HMAC capability in Lambda.
 - The application scopes records by Cognito `sub` and event ID, but it does not include a full account-management or retention workflow.
 - Uploaded photos can be deleted individually; reference images are currently managed by deleting the person/reference record.
 - Delete flows clean up S3 objects and DynamoDB metadata, but they are not wrapped in a multi-service transaction.
@@ -90,6 +99,6 @@ Guest signup is a separate path: an authenticated owner obtains `/events/{event_
 - More reference images per guest can improve matching across side angles and candid shots, but increases Rekognition comparison calls.
 - The current MVP does not crop every detected face in group photos before matching.
 - S3 objects remain private; browser access uses short-lived signed URLs.
-- Guest capabilities currently have no automatic expiry or per-event revocation. Rotating the server signing secret invalidates every existing link; it stays server-side and must be preserved when recovering a deployment.
-- The current delivery output is a browser-generated approved-only CSV/filename list. Hosted client galleries, guest-side deletion and payments are not implemented.
+- Guest capabilities have no automatic expiry. Closing signup blocks new processing/presign requests; reopening rotates that event's token. Conditional writes protect invitation versions from concurrent updates. Existing in-flight work and issued S3 PUT URLs are not cancelled by closing. The server signing secret remains private and must be preserved during deployment.
+- The Deliver view offers individual original downloads through owner-authenticated, five-minute attachment URLs, plus a browser-generated approved-only CSV/filename list. Private guest galleries use separately hashed, seven-day capabilities and fresh approval checks; guest-side deletion and payments are not implemented.
 - Public-space tracking, correctional surveillance, inmate tracking, and automated law-enforcement identification are non-target use cases for this architecture.

@@ -9,11 +9,15 @@ import {
   RefreshCw,
   RotateCcw,
   X,
+  Settings2,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type { GalleryLink } from "./types";
 import { createLiveClient, type WorkspaceClient } from "./client";
 import { createDemoClient } from "./demoClient";
 import { DeliverView } from "./DeliverView";
+import { EventDetails } from "./EventDetails";
+import { RematchDialog } from "./RematchDialog";
 import { pluralize } from "./format";
 import { GuestsView } from "./GuestsView";
 import { Link } from "./Link";
@@ -58,6 +62,9 @@ export function Workspace(props: WorkspaceProps) {
   const ws = useWorkspace({ client, onSessionExpired });
   const [tab, setTab] = useState<Tab>("guests");
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [findingGuest, setFindingGuest] = useState<string | null>(null);
+  const [galleryLinks, setGalleryLinks] = useState<Map<string, GalleryLink>>(() => new Map());
   const [newEventName, setNewEventName] = useState("");
 
   const { library } = ws;
@@ -124,16 +131,16 @@ export function Workspace(props: WorkspaceProps) {
     }
     if (pending === 0 && approvedPairs > 0 && tab !== "deliver") {
       return {
-        label: "Open Deliver",
+        label: "Open guest galleries",
         target: "deliver" as Tab,
-        text: "Approved matches are ready to export as a photo list.",
+        text: "Your approved photos are ready to share with your guests.",
       };
     }
     return null;
   })();
 
   return (
-    <div className="app">
+    <div className="app" data-view={tab}>
       <a className="skip-link" href="#main">
         Skip to workspace
       </a>
@@ -323,6 +330,13 @@ export function Workspace(props: WorkspaceProps) {
       </div>
 
       <main className="main" id="main" tabIndex={-1}>
+        {showViews && activeEvent && (
+          <section className="event-context" aria-label="Current event">
+            <div><p className="eyebrow">{isDemo ? "Your sample event" : activeEvent.hostName || "Your private event"}</p><h2>{activeEvent.name}</h2></div>
+            <div className="event-context-actions"><span className={"signup-status" + (activeEvent.signupOpen === false ? " is-closed" : "")}>{activeEvent.signupOpen === false ? "Signup closed" : "Signup open"}</span><button className="button button-compact" disabled={ws.isBusy} onClick={() => { ws.dismissNotice(); setIsEditingEvent(true); }} type="button"><Settings2 aria-hidden="true" size={16} /> Event details</button></div>
+          </section>
+        )}
+        {isEditingEvent && activeEvent && <EventDetails busy={ws.isBusy} error={ws.notice?.tone === "error" ? ws.notice.text : undefined} event={activeEvent} key={activeEvent.id} onClose={() => setIsEditingEvent(false)} onSave={ws.updateEvent} />}
         {ws.eventsState.status === "loading" && (
           <div className="state-block">
             <Spinner label="Loading your events…" />
@@ -386,12 +400,17 @@ export function Workspace(props: WorkspaceProps) {
 
             {showViews && tab === "guests" && (
               <GuestsView
+                event={activeEvent}
+                isDemo={isDemo}
                 isBusy={ws.isBusy}
                 key={ws.activeEventId}
                 onAddGuest={ws.addGuest}
                 onDeleteGuest={(person) => void ws.deleteGuest(person)}
                 onGetIntakeLink={getIntakeLink ? () => getIntakeLink(ws.activeEventId) : undefined}
                 onRefresh={ws.refresh}
+                onEditEvent={() => { ws.dismissNotice(); setIsEditingEvent(true); }}
+                onFindGuest={setFindingGuest}
+                hasPhotos={library.photos.length > 0}
                 people={library.people}
                 stats={stats}
                 submissionError={ws.notice?.tone === "error" ? ws.notice.text : undefined}
@@ -411,6 +430,9 @@ export function Workspace(props: WorkspaceProps) {
                 onRetry={ws.retryFailedUploads}
                 onReview={(entry, status) => void ws.reviewMatch(entry, status)}
                 onUpload={ws.uploadPhotos}
+                onAssignGuest={ws.assignGuest}
+                onFindGuest={() => setFindingGuest("")}
+                submissionError={ws.notice?.tone === "error" ? ws.notice.text : undefined}
                 people={library.people}
                 photos={library.photos}
                 queue={ws.queue}
@@ -436,6 +458,12 @@ export function Workspace(props: WorkspaceProps) {
 
             {showViews && tab === "deliver" && (
               <DeliverView
+                event={activeEvent!}
+                galleryLinks={galleryLinks}
+                onCreateGallery={client.createGalleryLink ? async (personId, photoId) => { const result = await client.createGalleryLink!(personId, photoId); ws.updatePerson(result.person); setGalleryLinks(current => new Map(current).set(personId, result)); return result; } : undefined}
+                onDisableGallery={client.disableGalleryLink ? async personId => { const person = await client.disableGalleryLink!(personId); ws.updatePerson(person); setGalleryLinks(current => { const next = new Map(current); next.delete(personId); return next; }); return person; } : undefined}
+                isDemo={isDemo}
+                onDownload={(photoId) => client.downloadPhoto(ws.activeEventId, photoId)}
                 eventId={ws.activeEventId}
                 eventName={activeEvent?.name ?? "event"}
                 key={ws.activeEventId}
@@ -444,6 +472,7 @@ export function Workspace(props: WorkspaceProps) {
                 photos={library.photos}
               />
             )}
+            {findingGuest !== null && <RematchDialog initialGuestId={findingGuest} isDemo={isDemo} key={ws.activeEventId} onClose={() => setFindingGuest(null)} onRefresh={ws.refresh} onRematch={ws.rematchGuest} people={library.people} photos={library.photos} />}
             {showViews && nextStep && (
               <div className="next-step">
                 <p>{nextStep.text}</p>

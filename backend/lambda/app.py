@@ -2,8 +2,10 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
+import secrets
 import time
 import uuid
 from decimal import Decimal
@@ -12,6 +14,7 @@ from urllib.parse import quote, unquote
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
 
@@ -44,6 +47,7 @@ URL_EXPIRES_SECONDS = int(os.environ.get("URL_EXPIRES_SECONDS", "3600"))
 s3 = boto3.client("s3")
 rekognition = boto3.client("rekognition")
 dynamodb = boto3.resource("dynamodb")
+transaction_client = boto3.client("dynamodb")
 events_table = dynamodb.Table(EVENTS_TABLE)
 people_table = dynamodb.Table(PEOPLE_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
@@ -66,6 +70,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             result = response(200, presign_guest_references(read_json(event)), event)
         elif method == "POST" and path == "/guest-intake/process":
             result = response(200, process_guest_references(read_json(event)), event)
+        elif method == "POST" and path == "/guest-intake/status":
+            result = response(200, get_guest_submission(read_json(event)), event)
+        elif method == "GET" and path == "/guest-gallery":
+            result = response(200, get_guest_gallery(event.get("queryStringParameters") or {}), event)
+        elif method == "GET" and path.startswith("/guest-gallery/photos/") and path.endswith("/download"):
+            photo_id = extract_path_id(path.removesuffix("/download"), "/guest-gallery/photos/")
+            result = response(200, get_gallery_download(photo_id, event.get("queryStringParameters") or {}), event)
         else:
             user_id = get_request_user_id(event)
 
@@ -73,16 +84,33 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 result = response(200, {"events": list_events(user_id)}, event)
             elif method == "POST" and path == "/events":
                 result = response(201, {"event": create_event(read_json(event), user_id)}, event)
+            elif method == "PATCH" and path.startswith("/events/"):
+                result = response(200, {"event": update_event(extract_path_id(path, "/events/"), read_json(event), user_id)}, event)
             elif method == "GET" and path.startswith("/events/") and path.endswith("/intake-link"):
                 event_id = extract_path_id(path.removesuffix("/intake-link"), "/events/")
                 result = response(200, get_event_intake_link(event_id, user_id, event), event)
             elif method == "GET" and path == "/library":
                 event_id = get_query_param(event, "eventId")
                 result = response(200, get_library(user_id, event_id), event)
+            elif method == "POST" and path.startswith("/people/") and path.endswith("/gallery-link"):
+                person_id = extract_path_id(path.removesuffix("/gallery-link"), "/people/")
+                result = response(200, create_gallery_link(person_id, user_id, event, read_json(event)), event)
+            elif method == "DELETE" and path.startswith("/people/") and path.endswith("/gallery-link"):
+                person_id = extract_path_id(path.removesuffix("/gallery-link"), "/people/")
+                result = response(200, disable_gallery_link(person_id, user_id), event)
+            elif method == "POST" and path.startswith("/photos/") and path.endswith("/guests"):
+                photo_id = extract_path_id(path.removesuffix("/guests"), "/photos/")
+                result = response(200, {"match": assign_photo_guest(photo_id, read_json(event), user_id)}, event)
+            elif method == "POST" and path.startswith("/photos/") and path.endswith("/rematch"):
+                photo_id = extract_path_id(path.removesuffix("/rematch"), "/photos/")
+                result = response(200, rematch_photo_guest(photo_id, read_json(event), user_id), event)
             elif method == "POST" and path == "/uploads/presign":
                 result = response(200, presign_uploads(read_json(event), user_id), event)
             elif method == "POST" and path == "/uploads/process":
                 result = response(200, process_uploads(read_json(event), user_id), event)
+            elif method == "GET" and path.startswith("/photos/") and path.endswith("/download"):
+                photo = get_owned_item(photos_table, {"id": extract_path_id(path.removesuffix("/download"), "/photos/")}, user_id, "Photo")
+                result = response(200, {"url": signed_download_url(photo["key"], photo["name"]), "filename": photo["name"]}, event)
             elif method == "PATCH" and path.startswith("/matches/"):
                 photo_id, person_id = extract_match_ids(path)
                 result = response(
@@ -114,9 +142,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         result = response(404, {"message": str(error)}, event)
     except ValueError as error:
         result = response(400, {"message": str(error)}, event)
+    except BlockingIOError as error:
+        result = response(409, {"message": str(error)}, event)
     except ClientError as error:
-        log_event("error", "aws_service_call_failed", error=error.response)
-        result = response(502, {"message": "AWS service call failed"}, event)
+        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            result = response(409, {"message": "This item changed while saving. Refresh and check before trying again."}, event)
+        else:
+            log_event("error", "aws_service_call_failed", error=error.response)
+            result = response(502, {"message": "The service couldn't finish this request. Refresh and check before trying again."}, event)
     except Exception as error:
         log_event("error", "unexpected_server_error", error=repr(error))
         result = response(500, {"message": "Unexpected server error"}, event)
@@ -161,9 +194,51 @@ def list_events(user_id: str) -> list[dict[str, Any]]:
     return sorted(events, key=lambda item: item["createdAt"], reverse=True)
 
 
+def update_event(event_id: str, payload: dict[str, Any], user_id: str) -> dict[str, Any]:
+    event = get_owned_event(event_id, user_id)
+    name = validate_event_name(payload.get("name", event["name"]))
+    host = str(payload.get("hostName", event.get("host_name", ""))).strip()
+    contact = str(payload.get("contactEmail", event.get("contact_email", ""))).strip()
+    signup_open = payload.get("signupOpen", event.get("signup_open", True))
+    if len(host) > 80 or re.search(r"[\x00-\x1f\x7f]", host):
+        raise ValueError("Host or studio name must be at most 80 characters without control characters.")
+    if contact and (len(contact) > 254 or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", contact)):
+        raise ValueError("Enter a valid contact email address.")
+    if not isinstance(signup_open, bool):
+        raise ValueError("signupOpen must be true or false.")
+    version = int(event.get("intake_version", 0))
+    if signup_open and event.get("signup_open", True) is False:
+        version += 1  # Reopening never reactivates a previously shared link.
+    values = {":name": name, ":host_name": host, ":contact_email": contact,
+              ":signup_open": signup_open, ":intake_version": version,
+              ":updated_at": iso_now(), ":owner_id": user_id}
+    conditions = ["owner_id = :owner_id"]
+    # A stale settings request must never restore an old invitation version or reopen signup.
+    for field in ("intake_version", "signup_open"):
+        if field in event:
+            values[f":previous_{field}"] = event[field]
+            conditions.append(f"{field} = :previous_{field}")
+        else:
+            conditions.append(f"attribute_not_exists({field})")
+    try:
+        result = events_table.update_item(
+            Key={"id": event_id},
+            UpdateExpression="SET #name = :name, host_name = :host_name, contact_email = :contact_email, signup_open = :signup_open, intake_version = :intake_version, updated_at = :updated_at",
+            ConditionExpression=" AND ".join(conditions),
+            ExpressionAttributeNames={"#name": "name"},
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise ValueError("Event details changed in another tab. Refresh the event, then try again.") from error
+        raise
+    return normalize_event(result["Attributes"])
+
+
 def ensure_default_event(user_id: str) -> dict[str, Any]:
     event_id = default_event_id(user_id)
-    event = events_table.get_item(Key={"id": event_id}).get("Item")
+    event = events_table.get_item(Key={"id": event_id}, ConsistentRead=True).get("Item")
     if event and event.get("owner_id") == user_id:
         return event
 
@@ -184,30 +259,35 @@ def get_owned_event(event_id: str | None, user_id: str) -> dict[str, Any]:
     if not event_id:
         return ensure_default_event(user_id)
 
-    event = events_table.get_item(Key={"id": event_id}).get("Item")
+    event = events_table.get_item(Key={"id": event_id}, ConsistentRead=True).get("Item")
     if not event or event.get("owner_id") != user_id:
         raise LookupError("Event was not found.")
     return event
 
 
-def sign_intake_token(event_id: str) -> str:
+def sign_intake_token(event_id: str, version: int = 0) -> str:
     if not INTAKE_TOKEN_SECRET:
         raise ValueError("Guest intake links are not configured.")
-    return hmac.new(INTAKE_TOKEN_SECRET.encode("utf-8"), event_id.encode("utf-8"), hashlib.sha256).hexdigest()
+    message = event_id if version == 0 else f"{event_id}:intake:{version}"
+    return hmac.new(INTAKE_TOKEN_SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def get_public_event(event_id: str, token: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[a-f0-9]{64}", token) or not hmac.compare_digest(token, sign_intake_token(event_id)):
+def get_public_event(event_id: str, token: str, require_open: bool = True) -> dict[str, Any]:
+    if not re.fullmatch(r"[a-f0-9]{64}", token):
         raise LookupError("Guest intake link was not found.")
-    event = events_table.get_item(Key={"id": event_id}).get("Item")
-    if not event:
+    event = events_table.get_item(Key={"id": event_id}, ConsistentRead=True).get("Item")
+    if not event or not hmac.compare_digest(token, sign_intake_token(event_id, int(event.get("intake_version", 0)))):
         raise LookupError("Guest intake link was not found.")
+    if require_open and event.get("signup_open", True) is False:
+        raise ValueError("Guest signup has closed. Contact your host for help.")
     return event
 
 
 def get_event_intake_link(event_id: str, user_id: str, request_event: dict[str, Any]) -> dict[str, Any]:
     event = get_owned_event(event_id, user_id)
-    token = sign_intake_token(event["id"])
+    if event.get("signup_open", True) is False:
+        raise ValueError("Guest signup is closed. Reopen it in Event details to create a new link.")
+    token = sign_intake_token(event["id"], int(event.get("intake_version", 0)))
     origin = (request_event.get("headers") or {}).get("origin") or "http://localhost:5173"
     if origin not in ALLOWED_ORIGINS:
         origin = next((value for value in ALLOWED_ORIGINS if value.startswith("https://")), "http://localhost:5173")
@@ -216,8 +296,32 @@ def get_event_intake_link(event_id: str, user_id: str, request_event: dict[str, 
 
 
 def get_guest_intake(params: dict[str, Any]) -> dict[str, Any]:
-    event = get_public_event(require_string(params.get("eventId"), "eventId"), require_string(params.get("token"), "token"))
-    return {"eventId": event["id"], "eventName": event["name"]}
+    event = get_public_event(require_string(params.get("eventId"), "eventId"), require_string(params.get("token"), "token"), require_open=False)
+    return {"eventId": event["id"], "eventName": event["name"],
+            "hostName": event.get("host_name", ""), "contactEmail": event.get("contact_email", ""),
+            "signupOpen": event.get("signup_open", True)}
+
+
+def get_guest_submission(payload: dict[str, Any]) -> dict[str, Any]:
+    event = get_public_event(require_string(payload.get("eventId"), "eventId"), require_string(payload.get("token"), "token"), require_open=False)
+    ids = payload.get("uploadIds")
+    if not isinstance(ids, list) or not 1 <= len(ids) <= MAX_REFS_PER_PERSON or any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+        raise ValueError("A valid submission receipt is required.")
+    sessions = [uploads_table.get_item(Key={"id": value}, ConsistentRead=True).get("Item") for value in ids]
+    if any(not item or item.get("event_id") != event["id"] or item.get("owner_id") != event["owner_id"]
+           or item.get("intake_source") != "guest_submitted" or item.get("mode") != "references" for item in sessions):
+        raise LookupError("Submission was not found.")
+    person_ids = {item.get("person_id") for item in sessions}
+    if len(person_ids) != 1 or None in person_ids:
+        raise LookupError("Submission was not found.")
+    person = people_table.get_item(Key={"id": next(iter(person_ids))}, ConsistentRead=True).get("Item")
+    saved = 0
+    if person and person.get("owner_id") == event["owner_id"] and item_event_id(person, event["owner_id"]) == event["id"]:
+        saved = sum(item["key"] in person.get("reference_keys", []) for item in sessions)
+    finished = all(item.get("status") in {"processed", "failed"} for item in sessions)
+    status = "saved" if saved == len(sessions) else "partial" if finished and saved else "not_saved" if finished else "pending"
+    return {"status": status, "referenceCount": saved,
+            "name": person["name"] if saved else ""}
 
 
 def presign_guest_references(payload: dict[str, Any]) -> dict[str, Any]:
@@ -265,6 +369,9 @@ def normalize_event(item: dict[str, Any]) -> dict[str, Any]:
         "name": item["name"],
         "createdAt": item.get("created_at", ""),
         "status": item.get("status", "active"),
+        "hostName": item.get("host_name", ""),
+        "contactEmail": item.get("contact_email", ""),
+        "signupOpen": item.get("signup_open", True),
     }
 
 
@@ -426,6 +533,11 @@ def process_reference_files(
         try:
             person_name = file_item.get("personName") or name_from_filename(file_item["name"])
             person_id = file_item.get("personId") or f"person-{owner_prefix}-{event_token}-{slugify(person_name)}"
+            current = people_table.get_item(Key={"id": person_id}, ConsistentRead=True).get("Item")
+            needs_existing = bool(current or file_item.get("existingPerson") or person_id in people)
+            if needs_existing and (not current or current.get("owner_id") != user_id or item_event_id(current, user_id) != event_id or current.get("deletion_pending")):
+                delete_s3_object(file_item["key"])
+                raise LookupError("This guest was removed or removal is still finishing.")
 
             indexed = rekognition.index_faces(
                 CollectionId=COLLECTION_ID,
@@ -449,34 +561,52 @@ def process_reference_files(
                 continue
 
             now = iso_now()
-            updated = people_table.update_item(
-                Key={"id": person_id},
-                UpdateExpression=(
-                    "SET owner_id = :owner_id, event_id = :event_id, #name = :name, "
-                    "initials = :initials, updated_at = :now, "
-                    "consent_status = :consent_status, consent_source = :consent_source, "
-                    "consent_captured_at = :consent_captured_at, "
-                    "reference_keys = list_append(if_not_exists(reference_keys, :empty), :keys), "
-                    "face_ids = list_append(if_not_exists(face_ids, :empty), :face_ids) "
-                    "ADD reference_count :one"
-                ),
-                ExpressionAttributeNames={"#name": "name"},
-                ExpressionAttributeValues={
-                    ":owner_id": user_id,
-                    ":event_id": event_id,
-                    ":name": person_name,
-                    ":initials": initials_from_name(person_name),
-                    ":now": now,
-                    ":consent_status": consent["consentStatus"],
-                    ":consent_source": consent["consentSource"],
-                    ":consent_captured_at": consent["consentCapturedAt"],
-                    ":empty": [],
-                    ":keys": [file_item["key"]],
-                    ":face_ids": face_ids,
-                    ":one": 1,
-                },
-                ReturnValues="ALL_NEW",
-            )
+            condition = "owner_id = :owner_id AND (attribute_not_exists(deletion_pending) OR deletion_pending = :not_pending)" if needs_existing else "attribute_not_exists(id)"
+            extra_values = {":not_pending": False} if needs_existing else {}
+            if file_item.get("personName"):
+                condition += " AND (attribute_not_exists(reference_count) OR reference_count < :max_refs)"
+                extra_values[":max_refs"] = MAX_REFS_PER_PERSON
+            try:
+                updated = people_table.update_item(
+                    Key={"id": person_id},
+                    UpdateExpression=(
+                        "SET owner_id = :owner_id, event_id = :event_id, #name = :name, "
+                        "initials = :initials, updated_at = :now, "
+                        "consent_status = :consent_status, consent_source = :consent_source, "
+                        "consent_captured_at = :consent_captured_at, "
+                        "reference_keys = list_append(if_not_exists(reference_keys, :empty), :keys), "
+                        "face_ids = list_append(if_not_exists(face_ids, :empty), :face_ids) "
+                        "ADD reference_count :one"
+                    ),
+                    ExpressionAttributeNames={"#name": "name"},
+                    ExpressionAttributeValues={
+                        ":owner_id": user_id,
+                        ":event_id": event_id,
+                        ":name": person_name,
+                        ":initials": initials_from_name(person_name),
+                        ":now": now,
+                        ":consent_status": consent["consentStatus"],
+                        ":consent_source": consent["consentSource"],
+                        ":consent_captured_at": consent["consentCapturedAt"],
+                        ":empty": [],
+                        ":keys": [file_item["key"]],
+                        ":face_ids": face_ids,
+                        ":one": 1,
+                        **extra_values,
+                    },
+                    ReturnValues="ALL_NEW",
+                    ConditionExpression=condition,
+                )
+            except ClientError as error:
+                if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
+                latest = people_table.get_item(Key={"id": person_id}, ConsistentRead=True).get("Item") or {}
+                retained = set((current or {}).get("face_ids", [])) | set(latest.get("face_ids", []))
+                disposable = [face_id for face_id in face_ids if face_id not in retained]
+                if disposable:
+                    rekognition.delete_faces(CollectionId=COLLECTION_ID, FaceIds=disposable)
+                delete_s3_object(file_item["key"])
+                raise ValueError("The guest changed or their reference limit was reached. Refresh before adding another photo.") from error
             people[person_id] = normalize_person(updated["Attributes"])
             mark_upload_processed(file_item["uploadId"])
         except Exception as error:
@@ -489,7 +619,8 @@ def process_reference_files(
 def process_photo_files(
     files: list[dict[str, Any]], user_id: str, event_id: str
 ) -> dict[str, Any]:
-    people = query_owner_event_items(people_table, PEOPLE_OWNER_INDEX, user_id, event_id)
+    people = [person for person in query_owner_event_items(people_table, PEOPLE_OWNER_INDEX, user_id, event_id)
+              if person.get("consent_status") == "captured" and not person.get("deletion_pending")]
     if not people:
         raise ValueError("Add a guest reference photo before uploading event photos.")
     if len(people) > MAX_COMPARE_PEOPLE:
@@ -507,8 +638,7 @@ def process_photo_files(
             now = iso_now()
             matches = find_matches(file_item["key"], people)
 
-            photos_table.put_item(
-                Item={
+            photo = {
                     "id": photo_id,
                     "owner_id": user_id,
                     "event_id": event_id,
@@ -516,13 +646,14 @@ def process_photo_files(
                     "key": file_item["key"],
                     "size": int(file_item["size"]),
                     "uploaded_at": now,
-                    "match_count": len(matches),
+                    "match_count": 0,
                 }
-            )
+            photos_table.put_item(Item=photo)
 
+            saved_matches = []
+            people_by_id = {person["id"]: person for person in people}
             for match in matches:
-                matches_table.put_item(
-                    Item={
+                item = {
                         "photo_id": photo_id,
                         "person_id": match["personId"],
                         "owner_id": user_id,
@@ -531,13 +662,16 @@ def process_photo_files(
                         "confidence": Decimal(str(round(match["confidence"], 2))),
                         "status": match["status"],
                         "uploaded_at": now,
+                        **({"face_box": {key: Decimal(str(value)) for key, value in match["faceBox"].items()}} if match.get("faceBox") else {}),
                     }
-                )
-                people_table.update_item(
-                    Key={"id": match["personId"]},
-                    UpdateExpression="SET updated_at = :now ADD photo_count :one",
-                    ExpressionAttributeValues={":one": 1, ":now": now},
-                )
+                try:
+                    write_match_atomically(photo, people_by_id[match["personId"]], item, None)
+                except ValueError:
+                    current = people_table.get_item(Key={"id": match["personId"]}, ConsistentRead=True).get("Item")
+                    if not current or current.get("deletion_pending") or current.get("consent_status") != "captured":
+                        continue
+                    raise
+                saved_matches.append(match)
 
             photos.append(
                 {
@@ -546,7 +680,7 @@ def process_photo_files(
                     "size": int(file_item["size"]),
                     "uploadedAt": now,
                     "previewUrl": signed_get_url(file_item["key"]),
-                    "matches": matches,
+                    "matches": saved_matches,
                 }
             )
             mark_upload_processed(file_item["uploadId"])
@@ -563,6 +697,7 @@ def find_matches(photo_key: str, people: list[dict[str, Any]]) -> list[dict[str,
     for person in people:
         reference_keys = person.get("reference_keys") or []
         best_similarity = 0.0
+        best_box = None
 
         for reference_key in reference_keys[:MAX_REFS_PER_PERSON]:
             compared = rekognition.compare_faces(
@@ -574,9 +709,10 @@ def find_matches(photo_key: str, people: list[dict[str, Any]]) -> list[dict[str,
                 QualityFilter="AUTO",
             )
             for face_match in compared.get("FaceMatches", []):
-                best_similarity = max(
-                    best_similarity, float(face_match.get("Similarity", 0))
-                )
+                similarity = float(face_match.get("Similarity", 0))
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_box = normalize_face_box(face_match.get("Face", {}).get("BoundingBox"))
 
         if best_similarity >= REVIEW_THRESHOLD:
             status = "matched" if best_similarity >= MATCHED_THRESHOLD else "needs_review"
@@ -586,10 +722,27 @@ def find_matches(photo_key: str, people: list[dict[str, Any]]) -> list[dict[str,
                     "personName": person["name"],
                     "confidence": round(best_similarity, 1),
                     "status": status,
+                    **({"faceBox": best_box} if best_box else {}),
                 }
             )
 
     return sorted(matches, key=lambda item: item["confidence"], reverse=True)
+
+
+def normalize_face_box(box: Any) -> dict[str, float] | None:
+    if not isinstance(box, dict):
+        return None
+    try:
+        left, top, width, height = (float(box[key]) for key in ("Left", "Top", "Width", "Height"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (left, top, width, height)) or width <= 0 or height <= 0:
+        return None
+    right, bottom = min(1, left + width), min(1, top + height)
+    left, top = max(0, left), max(0, top)
+    if right <= left or bottom <= top:
+        return None
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
 
 
 def get_library(user_id: str, event_id: str | None = None) -> dict[str, Any]:
@@ -628,7 +781,7 @@ def get_library(user_id: str, event_id: str | None = None) -> dict[str, Any]:
                 "previewUrl": signed_get_url(item["key"]),
                 "matches": sorted(
                     matches_by_photo.get(item["id"], []),
-                    key=lambda match: match["confidence"],
+                    key=lambda match: match.get("confidence", 0),
                     reverse=True,
                 ),
             }
@@ -645,6 +798,231 @@ def get_library(user_id: str, event_id: str | None = None) -> dict[str, Any]:
         "people": sorted(people, key=lambda item: item["name"]),
         "photos": sorted(photos, key=lambda item: item["uploadedAt"], reverse=True),
     }
+
+
+def get_photo_guest(photo_id: str, person_id: str, user_id: str, event_id: str) -> tuple[dict, dict]:
+    photo = get_owned_item(photos_table, {"id": photo_id}, user_id, "Photo")
+    person = get_owned_item(people_table, {"id": person_id}, user_id, "Guest")
+    if item_event_id(photo, user_id) != event_id or item_event_id(person, user_id) != event_id:
+        raise LookupError("Photo or guest was not found in this event.")
+    if person.get("consent_status") != "captured" or person.get("deletion_pending"):
+        raise ValueError("Record this guest's permission before adding or sharing their photos.")
+    return photo, person
+
+
+def write_match_atomically(photo: dict, person: dict, match: dict, previous: dict | None) -> None:
+    serialize = TypeSerializer().serialize
+    encode = lambda value: {key: serialize(item) for key, item in value.items()}
+    owner = photo["owner_id"]
+    delta = 1 if not previous or previous.get("status") == "rejected" else 0
+    names = {}
+    values = {}
+    condition = "attribute_not_exists(photo_id)"
+    if previous:
+        names["#status"] = "status"
+        values = {":owner": owner, ":previous": previous["status"]}
+        condition = "owner_id = :owner AND #status = :previous"
+        if previous.get("updated_at"):
+            values[":revision"] = previous["updated_at"]
+            condition += " AND updated_at = :revision"
+        else:
+            condition += " AND attribute_not_exists(updated_at)"
+    put = {"TableName": MATCHES_TABLE, "Item": encode(match), "ConditionExpression": condition}
+    if values:
+        put["ExpressionAttributeValues"] = encode(values)
+        put["ExpressionAttributeNames"] = names
+    try:
+        transaction_client.transact_write_items(TransactItems=[
+            {"Put": put},
+            {"Update": {
+                "TableName": PHOTOS_TABLE, "Key": encode({"id": photo["id"]}),
+                "UpdateExpression": "ADD match_count :delta",
+                "ConditionExpression": "owner_id = :owner",
+                "ExpressionAttributeValues": encode({":owner": owner, ":delta": delta}),
+            }},
+            {"Update": {
+                "TableName": PEOPLE_TABLE, "Key": encode({"id": person["id"]}),
+                "UpdateExpression": "SET updated_at = :now ADD photo_count :delta",
+                "ConditionExpression": "owner_id = :owner AND consent_status = :consent AND (attribute_not_exists(deletion_pending) OR deletion_pending = :not_pending)",
+                "ExpressionAttributeValues": encode({":owner": owner, ":consent": "captured", ":not_pending": False, ":delta": delta, ":now": iso_now()}),
+            }},
+        ])
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") == "TransactionCanceledException":
+            raise ValueError("This photo or guest changed while saving. Refresh the event and check the result.") from error
+        raise
+
+
+def assign_photo_guest(photo_id: str, payload: dict, user_id: str) -> dict:
+    event_id = require_string(payload.get("eventId"), "eventId")
+    person_id = require_string(payload.get("personId"), "personId")
+    photo, person = get_photo_guest(photo_id, person_id, user_id, event_id)
+    previous = matches_table.get_item(Key={"photo_id": photo_id, "person_id": person_id}, ConsistentRead=True).get("Item")
+    if previous and previous.get("owner_id") != user_id:
+        raise LookupError("Match was not found.")
+    if previous and previous.get("status") == "approved":
+        return normalize_match(previous)
+    now = iso_now()
+    match = {"photo_id": photo_id, "person_id": person_id, "owner_id": user_id,
+             "event_id": event_id, "person_name": person["name"], "status": "approved",
+             "source": "manual", "uploaded_at": photo.get("uploaded_at", now),
+             "reviewed_at": now, "updated_at": now}
+    write_match_atomically(photo, person, match, previous)
+    return normalize_match(match)
+
+
+def rematch_photo_guest(photo_id: str, payload: dict, user_id: str) -> dict:
+    event_id = require_string(payload.get("eventId"), "eventId")
+    person_id = require_string(payload.get("personId"), "personId")
+    request_id = require_string(payload.get("requestId"), "requestId")
+    if not re.fullmatch(r"[a-zA-Z0-9-]{16,64}", request_id):
+        raise ValueError("A valid matching request ID is required.")
+    photo, person = get_photo_guest(photo_id, person_id, user_id, event_id)
+    if not person.get("reference_keys"):
+        raise ValueError("Add a reference photo for this guest first.")
+    key = {"photo_id": photo_id, "person_id": person_id}
+    previous = matches_table.get_item(Key=key, ConsistentRead=True).get("Item")
+    if previous and previous.get("owner_id") != user_id:
+        raise LookupError("Match was not found.")
+    if previous and previous.get("status") in {"approved", "rejected"}:
+        return {"match": normalize_match(previous), "outcome": "kept_decision"}
+    operation_id = f"rematch-{s3_owner_prefix(user_id)}-{request_id}"
+    operation = uploads_table.get_item(Key={"id": operation_id}, ConsistentRead=True).get("Item")
+    if operation:
+        if any(operation.get(field) != value for field, value in
+               (("owner_id", user_id), ("event_id", event_id), ("photo_id", photo_id), ("person_id", person_id), ("mode", "rematch"))):
+            raise ValueError("This matching request belongs to another photo or guest.")
+        if operation.get("status") == "processed":
+            current = matches_table.get_item(Key=key, ConsistentRead=True).get("Item")
+            return {"match": normalize_match(current) if current else None, "outcome": operation["outcome"]}
+        if operation.get("status") == "failed":
+            raise ValueError("That matching attempt failed. Check the event and start a new search.")
+        raise BlockingIOError("Matching is still unconfirmed. Check this request again before starting another search.")
+    try:
+        uploads_table.put_item(Item={
+            "id": operation_id, "owner_id": user_id, "event_id": event_id,
+            "photo_id": photo_id, "person_id": person_id, "mode": "rematch",
+            "status": "processing", "expires_at": int(time.time()) + UPLOAD_SESSION_TTL_SECONDS,
+        }, ConditionExpression="attribute_not_exists(id)")
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise BlockingIOError("This matching request is already running. Check its result shortly.") from error
+        raise
+    try:
+        candidates = find_matches(photo["key"], [person])
+        outcome = "no_new_match"
+        current = previous
+        if candidates:
+            candidate = candidates[0]
+            now = iso_now()
+            current = {"photo_id": photo_id, "person_id": person_id, "owner_id": user_id,
+                       "event_id": event_id, "person_name": person["name"],
+                       "confidence": Decimal(str(candidate["confidence"])), "status": candidate["status"],
+                       "source": "face_match", "uploaded_at": photo.get("uploaded_at", now), "updated_at": now}
+            if candidate.get("faceBox"):
+                current["face_box"] = {key: Decimal(str(value)) for key, value in candidate["faceBox"].items()}
+            write_match_atomically(photo, person, current, previous)
+            outcome = "suggested"
+        uploads_table.update_item(Key={"id": operation_id},
+            UpdateExpression="SET #status = :processed, outcome = :outcome",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":processed": "processed", ":outcome": outcome})
+        return {"match": normalize_match(current) if current else None, "outcome": outcome}
+    except Exception:
+        mark_upload_failed(operation_id, "Matching attempt did not finish.")
+        raise
+
+
+def gallery_token_hash(person_id: str, token: str) -> str:
+    return hashlib.sha256(f"{person_id}:{token}".encode()).hexdigest()
+
+
+def gallery_person(params: dict) -> dict:
+    person_id = str(params.get("personId") or "")
+    token = str(params.get("token") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        raise LookupError("This gallery is unavailable. Ask your host for a new link.")
+    person = people_table.get_item(Key={"id": person_id}, ConsistentRead=True).get("Item")
+    if not person or person.get("deletion_pending") or not person.get("gallery_enabled") or person.get("consent_status") != "captured" or int(person.get("gallery_expires_at", 0)) <= int(time.time()):
+        raise LookupError("This gallery is unavailable. Ask your host for a new link.")
+    if not hmac.compare_digest(gallery_token_hash(person_id, token), person.get("gallery_token_hash", "")):
+        raise LookupError("This gallery is unavailable. Ask your host for a new link.")
+    return person
+
+
+def approved_gallery_photo(photo_id: str, person: dict) -> dict | None:
+    match = matches_table.get_item(Key={"photo_id": photo_id, "person_id": person["id"]}, ConsistentRead=True).get("Item")
+    owner = person["owner_id"]
+    event_id = item_event_id(person, owner)
+    if not match or match.get("owner_id") != owner or item_event_id(match, owner) != event_id or match.get("status") != "approved":
+        return None
+    photo = photos_table.get_item(Key={"id": photo_id}, ConsistentRead=True).get("Item")
+    if not photo or photo.get("owner_id") != owner or item_event_id(photo, owner) != event_id:
+        return None
+    return photo
+
+
+def create_gallery_link(person_id: str, user_id: str, request_event: dict, payload: dict | None = None) -> dict:
+    person = get_owned_item(people_table, {"id": person_id}, user_id, "Guest")
+    if person.get("consent_status") != "captured" or person.get("deletion_pending"):
+        raise ValueError("Record this guest's permission before sharing photos.")
+    event = get_owned_event(item_event_id(person, user_id), user_id)
+    hint = (payload or {}).get("photoId")
+    if hint is not None and (not isinstance(hint, str) or not hint or len(hint) > 256):
+        raise ValueError("A valid approved photo ID is required.")
+    first_photo = approved_gallery_photo(hint, person) if hint else None
+    if not first_photo:
+        candidates = query_all_items(matches_table, IndexName="person_id-photo_id-index", KeyConditionExpression=Key("person_id").eq(person_id))
+        first_photo = next((photo for item in candidates if (photo := approved_gallery_photo(item["photo_id"], person))), None)
+    if not first_photo:
+        raise ValueError("Approve at least one photo for this guest before sharing.")
+    token = secrets.token_urlsafe(32)
+    expires = int(time.time()) + 7 * 24 * 3600
+    people_table.update_item(Key={"id": person_id},
+        UpdateExpression="SET gallery_token_hash = :hash, gallery_enabled = :enabled, gallery_expires_at = :expires, gallery_photo_hint = :photo_id",
+        ConditionExpression="owner_id = :owner AND consent_status = :consent AND (attribute_not_exists(deletion_pending) OR deletion_pending = :not_pending)",
+        ExpressionAttributeValues={":hash": gallery_token_hash(person_id, token), ":enabled": True,
+                                   ":expires": expires, ":owner": user_id, ":consent": "captured", ":photo_id": first_photo["id"], ":not_pending": False})
+    origin = (request_event.get("headers") or {}).get("origin")
+    if origin not in ALLOWED_ORIGINS:
+        origin = next((value for value in ALLOWED_ORIGINS if value.startswith("https://")), "http://localhost:5173")
+    return {"galleryUrl": f"{origin.rstrip('/')}/gallery?personId={quote(person_id)}&token={quote(token)}",
+            "expiresAt": expires, "person": normalize_person({**person, "gallery_enabled": True, "gallery_expires_at": expires})}
+
+
+def disable_gallery_link(person_id: str, user_id: str) -> dict:
+    person = get_owned_item(people_table, {"id": person_id}, user_id, "Guest")
+    people_table.update_item(Key={"id": person_id}, UpdateExpression="SET gallery_enabled = :enabled",
+                            ConditionExpression="owner_id = :owner",
+                            ExpressionAttributeValues={":enabled": False, ":owner": user_id})
+    return {"person": normalize_person({**person, "gallery_enabled": False})}
+
+
+def get_guest_gallery(params: dict) -> dict:
+    person = gallery_person(params)
+    owner = person["owner_id"]
+    event = get_owned_event(item_event_id(person, owner), owner)
+    candidates = query_all_items(matches_table, IndexName="person_id-photo_id-index", KeyConditionExpression=Key("person_id").eq(person["id"]))
+    ids = {item["photo_id"] for item in candidates}
+    # The index can lag a just-approved first photo; the hint still gets full authorization checks.
+    if person.get("gallery_photo_hint"):
+        ids.add(person["gallery_photo_hint"])
+    photos = []
+    for photo_id in ids:
+        photo = approved_gallery_photo(photo_id, person)
+        if photo:
+            photos.append({"id": photo["id"], "name": photo["name"], "previewUrl": signed_get_url(photo["key"], expires=300)})
+    return {"eventName": event["name"], "guestName": person["name"],
+            "hostName": event.get("host_name", ""), "contactEmail": event.get("contact_email", ""),
+            "expiresAt": int(person["gallery_expires_at"]), "photos": sorted(photos, key=lambda photo: photo["name"])}
+
+
+def get_gallery_download(photo_id: str, params: dict) -> dict:
+    person = gallery_person(params)
+    photo = approved_gallery_photo(photo_id, person)
+    if not photo:
+        raise LookupError("This photo is no longer available in your gallery.")
+    return {"url": signed_download_url(photo["key"], photo["name"]), "filename": photo["name"]}
 
 
 def delete_photo(photo_id: str, user_id: str) -> dict[str, Any]:
@@ -678,6 +1056,14 @@ def delete_photo(photo_id: str, user_id: str) -> dict[str, Any]:
 
 def delete_person(person_id: str, user_id: str) -> dict[str, Any]:
     person = get_owned_item(people_table, {"id": person_id}, user_id, "Person")
+    # Stop access and new references before multi-service cleanup; keep the marker for safe retry.
+    person = people_table.update_item(
+        Key={"id": person_id},
+        UpdateExpression="SET deletion_pending = :pending, gallery_enabled = :disabled",
+        ConditionExpression="owner_id = :owner",
+        ExpressionAttributeValues={":pending": True, ":disabled": False, ":owner": user_id},
+        ReturnValues="ALL_NEW",
+    )["Attributes"]
     face_ids = [face_id for face_id in person.get("face_ids", []) if face_id]
     reference_keys = [key for key in person.get("reference_keys", []) if key]
     matches = query_all_items(
@@ -724,17 +1110,21 @@ def update_match_status(
     previous_status = normalize_status(match.get("status"))
     now = iso_now()
 
-    matches_table.update_item(
+    updated = matches_table.update_item(
         Key={"photo_id": photo_id, "person_id": person_id},
         UpdateExpression=(
             "SET #status = :status, reviewed_at = :reviewed_at, updated_at = :updated_at"
         ),
+        ConditionExpression="owner_id = :owner_id AND #status = :previous_status",
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={
             ":status": status,
             ":reviewed_at": now,
             ":updated_at": now,
+            ":owner_id": user_id,
+            ":previous_status": match["status"],
         },
+        ReturnValues="ALL_NEW",
     )
 
     if previous_status != "rejected" and status == "rejected":
@@ -744,12 +1134,12 @@ def update_match_status(
         increment_person_photo_count(person_id)
         increment_photo_match_count(photo_id)
 
-    return normalize_match({**match, "status": status, "reviewed_at": now})
+    return normalize_match(updated["Attributes"])
 
 
 def get_match_item(photo_id: str, person_id: str, user_id: str) -> dict[str, Any]:
     match = matches_table.get_item(
-        Key={"photo_id": photo_id, "person_id": person_id}
+        Key={"photo_id": photo_id, "person_id": person_id}, ConsistentRead=True
     ).get("Item")
     if not match or match.get("owner_id") != user_id:
         raise LookupError("Match was not found.")
@@ -776,9 +1166,11 @@ def normalize_match(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "personId": item["person_id"],
         "personName": item["person_name"],
-        "confidence": float(item["confidence"]),
+        **({"confidence": float(item["confidence"])} if item.get("confidence") is not None else {}),
+        "source": item.get("source", "face_match"),
         "status": normalize_status(item.get("status")),
         "reviewedAt": item.get("reviewed_at", ""),
+        **({"faceBox": {key: float(value) for key, value in item["face_box"].items()}} if item.get("face_box") else {}),
     }
 
 
@@ -803,6 +1195,9 @@ def normalize_person(item: dict[str, Any]) -> dict[str, Any]:
         "consentSource": item.get("consent_source", ""),
         "consentCapturedAt": item.get("consent_captured_at", ""),
         "referencePreviewUrl": signed_get_url(reference_keys[0]) if reference_keys else "",
+        "galleryEnabled": bool(item.get("gallery_enabled")) and int(item.get("gallery_expires_at", 0)) > int(time.time()),
+        "galleryExpiresAt": int(item.get("gallery_expires_at", 0)),
+        "deletionPending": bool(item.get("deletion_pending")),
     }
 
 
@@ -984,7 +1379,7 @@ def query_all_items(table: Any, **query_kwargs: Any) -> list[dict[str, Any]]:
 def get_owned_item(
     table: Any, key: dict[str, str], user_id: str, label: str
 ) -> dict[str, Any]:
-    item = table.get_item(Key=key).get("Item")
+    item = table.get_item(Key=key, ConsistentRead=True).get("Item")
     if not item or item.get("owner_id") != user_id:
         raise LookupError(f"{label} was not found.")
     return item
@@ -995,35 +1390,34 @@ def delete_s3_object(key: str) -> None:
 
 
 def decrement_person_photo_count(person_id: str) -> None:
-    people_table.update_item(
-        Key={"id": person_id},
-        UpdateExpression="SET updated_at = :now ADD photo_count :minus_one",
-        ExpressionAttributeValues={":minus_one": -1, ":now": iso_now()},
-    )
+    adjust_counter(people_table, person_id, "photo_count", -1)
 
 
 def decrement_photo_match_count(photo_id: str) -> None:
-    photos_table.update_item(
-        Key={"id": photo_id},
-        UpdateExpression="ADD match_count :minus_one",
-        ExpressionAttributeValues={":minus_one": -1},
-    )
+    adjust_counter(photos_table, photo_id, "match_count", -1)
 
 
 def increment_person_photo_count(person_id: str) -> None:
-    people_table.update_item(
-        Key={"id": person_id},
-        UpdateExpression="SET updated_at = :now ADD photo_count :one",
-        ExpressionAttributeValues={":one": 1, ":now": iso_now()},
-    )
+    adjust_counter(people_table, person_id, "photo_count", 1)
 
 
 def increment_photo_match_count(photo_id: str) -> None:
-    photos_table.update_item(
-        Key={"id": photo_id},
-        UpdateExpression="ADD match_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    adjust_counter(photos_table, photo_id, "match_count", 1)
+
+
+def adjust_counter(table: Any, item_id: str, field: str, delta: int) -> None:
+    # Cleanup/review can overlap deletion; never recreate a row just to change its count.
+    try:
+        table.update_item(
+            Key={"id": item_id},
+            UpdateExpression="SET updated_at = :now ADD #count :delta",
+            ExpressionAttributeNames={"#count": field},
+            ExpressionAttributeValues={":delta": delta, ":now": iso_now()},
+            ConditionExpression="attribute_exists(id)",
+        )
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
 
 
 def validate_upload_session(
@@ -1153,11 +1547,20 @@ def mark_upload_failed(upload_id: str, reason: str) -> None:
             log_event("warning", "mark_upload_failed_error", error=error.response)
 
 
-def signed_get_url(key: str) -> str:
+def signed_get_url(key: str, expires: int | None = None) -> str:
     return s3.generate_presigned_url(
         "get_object",
         Params={"Bucket": BUCKET_NAME, "Key": key},
-        ExpiresIn=URL_EXPIRES_SECONDS,
+        ExpiresIn=expires if expires is not None else URL_EXPIRES_SECONDS,
+    )
+
+
+def signed_download_url(key: str, filename: str) -> str:
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET_NAME, "Key": key,
+                "ResponseContentDisposition": f"attachment; filename*=UTF-8''{quote(safe_filename(filename), safe='')}"},
+        ExpiresIn=300,
     )
 
 
@@ -1184,6 +1587,7 @@ def cors_headers(event: dict[str, Any]) -> dict[str, str]:
         "Access-Control-Allow-Headers": "content-type,authorization",
         "Access-Control-Allow-Methods": "DELETE,GET,PATCH,POST,OPTIONS",
         "Content-Type": "application/json",
+        "Cache-Control": "no-store",
     }
 
 

@@ -63,6 +63,47 @@ export function createDemoClient(): WorkspaceClient {
   return {
     mode: "demo",
 
+    async assignGuest(eventId, photoId, personId) {
+      const content = contentFor(eventId);
+      const photo = content.photos.find(item => item.id === photoId);
+      const person = content.people.find(item => item.id === personId);
+      if (!photo || !person) throw new Error("That photo or guest no longer exists.");
+      if (person.consentStatus !== "captured") throw new Error("Record this guest's permission first.");
+      const existing = photo.matches.find(match => match.personId === personId);
+      if (existing?.status === "approved") return existing;
+      const match = { personId, personName: person.name, status: "approved" as const, source: "manual" as const, reviewedAt: new Date().toISOString() };
+      apply(eventId, { type: "match-updated", eventId, photoId, match });
+      return match;
+    },
+
+    async rematchGuest(eventId, photoId, personId) {
+      const content = contentFor(eventId);
+      const photo = content.photos.find(item => item.id === photoId);
+      const person = content.people.find(item => item.id === personId);
+      if (!photo || !person) throw new Error("That photo or guest no longer exists.");
+      if (person.consentStatus !== "captured") throw new Error("Record this guest's permission first.");
+      const existing = photo.matches.find(match => match.personId === personId);
+      if (existing?.status === "approved" || existing?.status === "rejected") return { match: existing, outcome: "kept_decision" };
+      // Only seeded relationships suggest matches; arbitrary sample photos aren't analysed.
+      if (!existing) return { match: null, outcome: "no_new_match" };
+      const match = existing;
+      apply(eventId, { type: "match-updated", eventId, photoId, match });
+      return { match, outcome: "suggested" };
+    },
+
+    async updateEvent(eventId, settings) {
+      const event = events.find((item) => item.id === eventId);
+      if (!event) throw new Error("That sample event doesn't exist.");
+      Object.assign(event, settings);
+      return eventWithCounts(event);
+    },
+
+    async downloadPhoto(eventId, photoId) {
+      const photo = contentFor(eventId).photos.find((item) => item.id === photoId);
+      if (!photo) throw new Error("That photo no longer exists.");
+      return { url: photo.previewUrl, filename: photo.name };
+    },
+
     async fetchEvents() {
       return events.map(eventWithCounts);
     },

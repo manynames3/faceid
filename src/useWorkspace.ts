@@ -8,7 +8,7 @@ import {
   type LibraryState,
   type ReviewEntry,
 } from "./library";
-import type { DecisionStatus, EventWorkspace, LibraryResult, Person, PhotoAsset } from "./types";
+import type { DecisionStatus, EventSettings, EventWorkspace, LibraryResult, Person, PhotoAsset } from "./types";
 import {
   chunkFiles,
   describePhotoResult,
@@ -285,9 +285,62 @@ export function useWorkspace({
     }
   }
 
+  async function updateEvent(settings: EventSettings) {
+    const eventId = activeEventRef.current;
+    if (!eventId || isBusy) return false;
+    beginOperation();
+    try {
+      const updated = await client.updateEvent(eventId, settings);
+      if (!aliveRef.current || activeEventRef.current !== eventId) return false;
+      setEvents((current) => current.map((event) => event.id === eventId ? { ...event, ...updated } : event));
+      notifyFor(eventId, "success", "Event details saved.");
+      return true;
+    } catch (error) {
+      await handleFailure(error, eventId, "Event details couldn't be saved.");
+      return false;
+    } finally {
+      endOperation();
+    }
+  }
+
   function retryEvents() {
     setEventsState({ error: null, status: "loading" });
     void loadEvents();
+  }
+
+  async function assignGuest(photoId: string, personId: string) {
+    const eventId = activeEventRef.current;
+    if (!eventId || isBusy) return false;
+    beginOperation();
+    try {
+      const match = await client.assignGuest(eventId, photoId, personId);
+      if (!aliveRef.current || activeEventRef.current !== eventId) return false;
+      dispatch({ type: "match-updated", eventId, photoId, match });
+      notifyFor(eventId, "success", `${match.personName} added to the approved photos.`);
+      return true;
+    } catch (error) {
+      await handleFailure(error, eventId, "That guest couldn't be added.");
+      return false;
+    } finally { endOperation(); }
+  }
+
+  async function rematchGuest(photoId: string, personId: string, requestId: string) {
+    const eventId = activeEventRef.current;
+    if (!eventId || isBusy) throw new Error("Wait for the current task to finish.");
+    beginOperation();
+    try {
+      const result = await client.rematchGuest(eventId, photoId, personId, requestId);
+      if (!aliveRef.current || activeEventRef.current !== eventId) throw new Error("The event changed. Check this result in the original event.");
+      if (result.match) dispatch({ type: "match-updated", eventId, photoId, match: result.match });
+      return result;
+    } catch (error) {
+      if (isSessionExpired(error)) onSessionExpired();
+      throw error;
+    } finally { endOperation(); }
+  }
+
+  function updatePerson(person: Person) {
+    dispatch({ type: "merge-upload", eventId: activeEventRef.current, result: { people: [person], photos: [] } });
   }
 
   async function reviewMatch(entry: ReviewEntry, status: DecisionStatus) {
@@ -625,6 +678,9 @@ export function useWorkspace({
 
   return {
     activeEventId,
+    assignGuest,
+    rematchGuest,
+    updatePerson,
     addGuest,
     createEvent,
     deleteGuest,
@@ -638,6 +694,7 @@ export function useWorkspace({
     notice,
     queue,
     refresh,
+    updateEvent,
     rejectedFiles,
     resetSample,
     retryEvents,

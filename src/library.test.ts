@@ -50,6 +50,18 @@ describe("upsertPeople", () => {
   });
 });
 
+describe("manual correction state", () => {
+  it("creates a missing match and removes stale automatic score and face-box fields", () => {
+    const state: LibraryState = { ...emptyLibrary, eventId: "event-1", status: "ready", people: [], photos: [photo("photo-1", [{ ...match("guest-1", "needs_review"), faceBox: { left: .1, top: .1, width: .2, height: .2 } }])] };
+    const manual: PhotoMatch = { personId: "guest-1", personName: "Guest", source: "manual", status: "approved" };
+    const updated = libraryReducer(state, { type: "match-updated", eventId: "event-1", photoId: "photo-1", match: manual });
+    expect(updated.photos[0].matches).toEqual([manual]);
+    const added = libraryReducer(updated, { type: "match-updated", eventId: "event-1", photoId: "photo-1", match: { ...manual, personId: "guest-2" } });
+    expect(added.photos[0].matches).toHaveLength(2);
+    expect(libraryReducer(added, { type: "match-updated", eventId: "other-event", photoId: "photo-1", match: manual })).toBe(added);
+  });
+});
+
 describe("dedupeMatches", () => {
   it("keeps one record per guest, preferring the reviewed one", () => {
     const result = dedupeMatches([

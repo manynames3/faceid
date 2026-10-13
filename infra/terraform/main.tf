@@ -618,8 +618,41 @@ resource "aws_apigatewayv2_route" "event_intake_link" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+resource "aws_apigatewayv2_route" "event_settings" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "PATCH /events/{event_id}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "photo_download" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "GET /photos/{photo_id}/download"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 resource "aws_apigatewayv2_route" "guest_intake" {
-  for_each           = toset(["GET /guest-intake", "POST /guest-intake/presign", "POST /guest-intake/process"])
+  for_each           = toset(["GET /guest-intake", "POST /guest-intake/presign", "POST /guest-intake/process", "POST /guest-intake/status"])
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "photo_corrections" {
+  for_each           = toset(["POST /photos/{photo_id}/guests", "POST /photos/{photo_id}/rematch", "POST /people/{person_id}/gallery-link", "DELETE /people/{person_id}/gallery-link"])
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "guest_gallery" {
+  for_each           = toset(["GET /guest-gallery", "GET /guest-gallery/photos/{photo_id}/download"])
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = each.value
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"

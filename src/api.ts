@@ -11,11 +11,15 @@ import { simulateUpload } from "./simulate";
 import type {
   DecisionStatus,
   EventWorkspace,
+  EventSettings,
   LibraryResult,
   Person,
   PhotoMatch,
   UploadMode,
   UploadResult,
+  GalleryLink,
+  GuestGallery,
+  RematchResult,
 } from "./types";
 
 export { ApiError } from "./errors";
@@ -38,12 +42,14 @@ export type UploadPayload = {
   /** Add references to an existing guest instead of creating one (references only). */
   personId?: string;
   session?: AuthSession | null;
+  onReceipt?: (uploadIds: string[]) => void;
 };
 
 export const hasConfiguredApi = Boolean(apiBaseUrl);
 
-export type GuestIntake = { eventId: string; eventName: string };
+export type GuestIntake = { eventId: string; eventName: string; hostName?: string; contactEmail?: string; signupOpen?: boolean };
 export type IntakeLink = GuestIntake & { intakeUrl: string };
+export type GuestSubmission = { status: "pending" | "saved" | "partial" | "not_saved"; name: string; referenceCount: number };
 
 type PresignResponse = {
   uploads: Array<{
@@ -139,6 +145,64 @@ export async function fetchIntakeLink(eventId: string, session: AuthSession): Pr
   return readJson<IntakeLink>(response);
 }
 
+export async function updateEvent(eventId: string, settings: EventSettings, session: AuthSession): Promise<EventWorkspace> {
+  const response = await request(`${requireApi()}/events/${encodeURIComponent(eventId)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", ...authHeaders(session) },
+    body: JSON.stringify(settings),
+  });
+  return (await readJson<{ event: EventWorkspace }>(response)).event;
+}
+
+export async function fetchPhotoDownload(photoId: string, session: AuthSession): Promise<{ url: string; filename: string }> {
+  const response = await request(`${requireApi()}/photos/${encodeURIComponent(photoId)}/download`, { headers: authHeaders(session) });
+  return readJson(response);
+}
+
+export async function assignPhotoGuest(eventId: string, photoId: string, personId: string, session: AuthSession): Promise<PhotoMatch> {
+  const response = await request(`${requireApi()}/photos/${encodeURIComponent(photoId)}/guests`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(session) },
+    body: JSON.stringify({ eventId, personId }),
+  });
+  return (await readJson<{ match: PhotoMatch }>(response)).match;
+}
+
+export async function rematchPhotoGuest(eventId: string, photoId: string, personId: string, requestId: string, session: AuthSession): Promise<RematchResult> {
+  const response = await request(`${requireApi()}/photos/${encodeURIComponent(photoId)}/rematch`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(session) },
+    body: JSON.stringify({ eventId, personId, requestId }),
+  }, "process");
+  return readJson(response, "process");
+}
+
+export async function createGalleryLink(personId: string, session: AuthSession, photoId?: string): Promise<GalleryLink> {
+  const response = await request(`${requireApi()}/people/${encodeURIComponent(personId)}/gallery-link`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(session) }, body: JSON.stringify({ photoId }),
+  });
+  return readJson(response);
+}
+
+export async function disableGalleryLink(personId: string, session: AuthSession): Promise<Person> {
+  const response = await request(`${requireApi()}/people/${encodeURIComponent(personId)}/gallery-link`, {
+    method: "DELETE", headers: authHeaders(session),
+  });
+  return (await readJson<{ person: Person }>(response)).person;
+}
+
+export async function fetchGuestGallery(personId: string, token: string, signal?: AbortSignal): Promise<GuestGallery> {
+  return readJson(await request(`${requireApi()}/guest-gallery?${new URLSearchParams({ personId, token })}`, { signal }));
+}
+
+export async function fetchGalleryDownload(personId: string, token: string, photoId: string): Promise<{ url: string; filename: string }> {
+  return readJson(await request(`${requireApi()}/guest-gallery/photos/${encodeURIComponent(photoId)}/download?${new URLSearchParams({ personId, token })}`, {}));
+}
+
+export async function fetchGuestSubmission(eventId: string, token: string, uploadIds: string[]): Promise<GuestSubmission> {
+  const response = await request(`${requireApi()}/guest-intake/status`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eventId, token, uploadIds }),
+  });
+  return readJson(response);
+}
+
 export async function fetchGuestIntake(eventId: string, token: string, signal?: AbortSignal): Promise<GuestIntake> {
   const params = new URLSearchParams({ eventId, token });
   const response = await request(`${requireApi()}/guest-intake?${params}`, { signal });
@@ -221,6 +285,7 @@ export async function submitUpload({
   people,
   personId,
   session,
+  onReceipt,
 }: UploadPayload): Promise<UploadResult> {
   if (demo) {
     return simulateUpload({ files, guestName, mode, people, personId });
@@ -303,6 +368,7 @@ export async function submitUpload({
     });
   }
 
+  if (isGuest) onReceipt?.(uploadedFiles.map((file) => file.uploadId));
   const response = await request(
     `${base}/${uploadPath}/process`,
     {

@@ -34,7 +34,9 @@ export function createSampleData(): SampleData {
   return {
     event: {
       id: sampleEventId,
-      name: "Sample gala (simulated)",
+      name: "The garden reception",
+      hostName: "Sample studio",
+      signupOpen: true,
       createdAt: new Date(now - 1000 * 60 * 90).toISOString(),
       status: "active",
     },
@@ -75,6 +77,22 @@ export function createSampleData(): SampleData {
     ],
     photos: [
       {
+        id: "photo-sample-arrivals",
+        name: "sample-noah-garden.jpg",
+        size: 0,
+        uploadedAt: new Date(now - 1000 * 60 * 5).toISOString(),
+        previewUrl: "/images/sample-noah-garden.jpg",
+        matches: [
+          {
+            personId: "person-sample-noah",
+            personName: "Noah Kim",
+            confidence: 91.7,
+            status: "matched",
+            faceBox: { left: 0.23, top: 0.12, width: 0.155, height: 0.25 },
+          },
+        ],
+      },
+      {
         id: "photo-sample-garden",
         name: samplePortraits.ava.filename,
         size: 0,
@@ -100,21 +118,6 @@ export function createSampleData(): SampleData {
             personId: "person-sample-maya",
             personName: "Maya Johnson",
             confidence: 96.2,
-            status: "matched",
-          },
-        ],
-      },
-      {
-        id: "photo-sample-arrivals",
-        name: samplePortraits.noah.filename,
-        size: 0,
-        uploadedAt: new Date(now - 1000 * 60 * 55).toISOString(),
-        previewUrl: samplePortraits.noah.src,
-        matches: [
-          {
-            personId: "person-sample-noah",
-            personName: "Noah Kim",
-            confidence: 91.7,
             status: "matched",
           },
         ],

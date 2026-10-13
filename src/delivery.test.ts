@@ -82,9 +82,18 @@ describe("buildManifest", () => {
   it("writes the identifying columns and one-decimal similarity", () => {
     const [header, firstRow] = manifestToCsv(manifest.rows).split("\r\n");
     expect(header).toBe(
-      "event_id,guest_id,guest_name,photo_id,filename,similarity,reviewed_at",
+      "event_id,guest_id,guest_name,photo_id,filename,similarity,reviewed_at,match_source",
     );
-    expect(firstRow).toBe("event-1,p3,Ava,a,a.jpg,91.0,2026-05-20T10:00:00Z");
+    expect(firstRow).toBe("event-1,p3,Ava,a,a.jpg,91.0,2026-05-20T10:00:00Z,face_match");
+  });
+
+  it("exports manual assignments with explicit provenance and a blank similarity", () => {
+    const manualPhoto = photo("manual", "manual.jpg", []);
+    manualPhoto.matches = [{ personId: "p1", personName: "Sam Lee", status: "approved", source: "manual", reviewedAt: "2026-10-13T00:00:00Z" }];
+    const manifest = buildManifest({ eventId: "event-1", people, photos: [manualPhoto] });
+    const cells = manifestToCsv(manifest.rows).split("\r\n")[1].split(",");
+    expect(cells[5]).toBe("");
+    expect(cells[7]).toBe("manual");
   });
 
   it("lists filenames per guest and in a grouped manifest", () => {

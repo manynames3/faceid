@@ -1,6 +1,6 @@
 # FaceID
 
-FaceID Events helps photographers sort private-event photos by consenting guest. Guests submit named references and permission through an event signup link, or hosts add references themselves. Hosts upload a shoot, review suggested face matches, and export approved guest-by-guest photo lists for their existing delivery process. A React frontend on Cloudflare Pages connects to a Cognito-authenticated AWS backend, with Terraform-managed S3, Lambda, DynamoDB and Rekognition.
+FaceID Events helps photographers sort private-event photos by consenting guest. Guests submit named references and permission through an event signup link, or hosts add references themselves. Hosts upload a shoot, review suggested face matches, and share private guest galleries, download approved originals or export filenames for their existing delivery process. A React frontend on Cloudflare Pages connects to a Cognito-authenticated AWS backend, with Terraform-managed S3, Lambda, DynamoDB and Rekognition.
 
 **Live demo:** [https://faceid-8dc.pages.dev](https://faceid-8dc.pages.dev)
 
@@ -8,7 +8,7 @@ The public homepage explains the workflow. [Try the sample workspace](https://fa
 
 ## TLDR
 
-FaceID helps event photographers find each consenting guest's photos, review possible matches, and export a guest-by-guest delivery list. The public homepage explains the offer; an explicit sample workspace demonstrates the workflow without sending photos to AWS. The real workspace uses Cognito, private S3, Lambda, DynamoDB and Rekognition, managed with Terraform.
+FaceID helps event photographers find each consenting guest's photos, review possible matches, and share private guest galleries or export a guest-by-guest delivery list. The public homepage explains the offer; an explicit sample workspace demonstrates the workflow without sending photos to AWS. The real workspace uses Cognito, private S3, Lambda, DynamoDB and Rekognition, managed with Terraform.
 
 ## About
 
@@ -18,7 +18,7 @@ This project demonstrates a pragmatic path from an interactive frontend prototyp
 
 Captured from the local production build. Sample names, photos and matching scores are illustrative, not recognition benchmarks or customer evidence.
 
-[Sales Homepage](docs/screenshots/landing.jpg) · [Guest Workspace](docs/screenshots/workspace.jpg) · [Review Desk](docs/screenshots/review.jpg)
+[Sales Homepage](docs/screenshots/landing.jpg) · [Host Workspace](docs/screenshots/workspace.jpg) · [Review Desk](docs/screenshots/review.jpg) · [Guest Invitation](docs/screenshots/guest-invitation.jpg) · [Guest Gallery](docs/screenshots/guest-gallery.jpg)
 
 ![Portrait-led guest workspace with permission status and review counts](docs/screenshots/workspace.jpg)
 
@@ -41,9 +41,11 @@ Captured from the local production build. Sample names, photos and matching scor
 - Cognito sign-in with API Gateway JWT authorization and owner-scoped S3/DynamoDB records.
 - Event/workspace data model that scopes people, photos, matches, and uploads to a selected private event.
 - Consent-attested reference intake records source/time for host uploads and guest-submitted signups. Event-scoped guest capabilities allow reference intake without exposing the owner's library.
-- Human-in-the-loop review workflow for match candidates: `matched`, `needs_review`, `approved`, and `rejected`.
+- Human-in-the-loop review, including suggested-face outlines for new matches and side-by-side mobile comparisons, for match candidates: `matched`, `needs_review`, `approved`, and `rejected`.
 - Named reference intake preserves operator-entered names, uses distinct identifiers for same-name guests, and binds references to verified upload sessions.
-- Approved-only delivery lists contain durable guest/photo identifiers and filenames, with spreadsheet formula protection and no signed URLs.
+- Approved-only delivery lists contain durable identifiers, filenames and manual/face-match provenance, with spreadsheet formula protection and no signed URLs.
+- Guest galleries use guest-bound hashed capabilities, consistent approval/ownership reads, seven-day expiry, link revocation and fresh five-minute original-download URLs. References and the guest list stay out of the public response.
+- Manual corrections are saved atomically with counters and carry no fabricated confidence score. Rematching compares one guest against one existing photo per request, preserving human decisions and replaying completed request IDs without repeat recognition.
 - DynamoDB-backed upload sessions that verify issued S3 keys, object size, content type, and upload metadata before processing.
 - Owner-scoped delete flows for removing uploaded photos and reference/person records from S3, DynamoDB, and Rekognition.
 - Portrait-led Guests, Photos, Review and Deliver views, focused intake dialogs, a side-by-side review desk, corrected decisions, and per-file partial/error states.
@@ -66,7 +68,7 @@ The system is documented in:
 - [Responsible Use And Matching Quality](docs/responsible-use.md)
 - [Architecture Decision Records](docs/adrs/README.md)
 - [Terraform Deployment Notes](infra/terraform/README.md)
-- [Joint Product Review And Acceptance Criteria](docs/product-experience.md)
+- [Product Review, Verification And Remaining Gaps](docs/product-experience.md)
 - [Media Sources](docs/media.md)
 
 At a high level:
@@ -85,17 +87,19 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite. The homepage is public; `/demo` opens a clearly labeled, simulated sample workspace. Sample data is temporary and is not uploaded to AWS, including when production API configuration is present.
+Open the URL printed by Vite. The homepage is public; `/demo` opens a clearly labeled, simulated sample workspace. `/demo/guest` previews name, photo selection, consent and success states without uploading anything. `/demo/gallery` previews the guest's finished gallery. Sample data is temporary and is not uploaded to AWS, including when production API configuration is present.
 
 For the real workspace, copy `.env.example` to `.env.local` and populate all three AWS/Cognito values from Terraform outputs. Add the exact frontend origin and callback URL to Terraform's CORS, callback and logout variables. Restart Vite after changing environment variables. `VITE_` values are public configuration, never credentials.
 
 ## First Event
 
-1. Sign in and create an event.
-2. In Guests, choose **Invite guests** and copy the signup link. Share it only with invited guests. They submit a name, one or two clear JPEG/PNG face photos and permission without an account. Or choose **Add manually** and confirm their permission. No filename renaming is required.
+1. Sign in and create an event. In **Event details**, add your host/studio name and guest contact email.
+2. In Guests, choose **Invite guests** and copy the signup link. Share it only with invited guests. They submit a name, one or two clear JPEG/PNG face photos and permission without an account. Or choose **Add guest** and confirm their permission. No filename renaming is required.
 3. In Photos, choose **Upload photos** to select or drop event photos. References must be ready first; adding references later does not automatically rematch older photos.
 4. In Review, inspect the whole image and reference photo, approve or reject candidates, and correct decisions when needed.
-5. In Deliver, export confirmed guest/photo rows or copy filenames into the existing gallery delivery workflow. Unreviewed and rejected suggestions are excluded. This is a file list, not a hosted guest gallery.
+5. In Deliver, create a private gallery link for each guest and send it through your usual email or messaging app. Guests view/download approved photos without an account. Links expire after seven days and can be replaced or disabled. Individual original downloads and CSV exports remain available.
+6. For missed matches, use **Add a guest** on a photo and confirm who is in it. Use **Find in photos** after adding a guest or a better second reference; up to 50 photos are checked sequentially, preserving earlier approvals and rejections.
+7. Close signup in **Event details** when intake ends. Reopening creates a new link and invalidates earlier links. Guests can contact you from their invitation with questions or removal requests.
 
 The frontend accepts JPEG/PNG up to 15 MiB each, processes event photos in small sequential requests, and reports partial progress. The default matching guardrails are 50 guests and two reference photos per guest. The API rejects events above its guest limit instead of silently skipping guests. Processing remains synchronous and is intended for small evaluations, not a large event ingestion service.
 
@@ -110,6 +114,22 @@ terraform -chdir=infra/terraform fmt -check
 terraform -chdir=infra/terraform validate
 git diff --check
 ```
+
+## Local API Contract Fixture
+
+For repeatable HTTP/browser checks without AWS credentials or cloud usage:
+
+```bash
+python3 backend/tests/serve_fixture.py
+```
+
+In another terminal, run:
+
+```bash
+VITE_API_BASE_URL=http://127.0.0.1:5220 npm run dev -- --host 127.0.0.1 --port 5219 --strictPort
+```
+
+The fixture listens only on localhost. `GET http://127.0.0.1:5220/fixture` returns a synthetic gallery URL; open it on the local frontend. Owner requests use the clearly synthetic `Bearer local-fixture-only` header. This server loads test AWS fakes, never contacts AWS, and must not be used as a production backend. It verifies contracts and UI behavior, not Cognito validation, real S3 signatures or recognition quality.
 
 ## Cloudflare Pages
 
@@ -165,10 +185,10 @@ See [infra/terraform/README.md](infra/terraform/README.md) for variables, cost g
 
 - The MVP backend uses bounded `CompareFaces` checks against stored reference images; this is simple and deployable, but cost grows with `photos * people * references`.
 - Different face angles and poor image quality can reduce match confidence. Use two clear references when poses differ, and review the results. The default limit is two references per guest, not an unlimited reference database.
-- The current Lambda does not crop every face in group photos before searching. Large group-photo support would require a deeper face-detection/cropping pipeline.
-- No moderation, hosted gallery sharing, role-based staff workflow, or retention scheduler is included.
-- Guest signup links are bearer capabilities for references only. They do not automatically expire and have no per-event revocation control; share them only with invited guests. Guests ask the host to remove references or withdraw permission.
-- CSV export helps prepare a delivery list; it does not publish galleries, download original photo bundles, or collect payments.
+- CompareFaces can return candidate face locations in group photos; new matches retain the highest-scoring face box. This is not exhaustive detection/cropping or a guarantee that every guest in a large group will be found.
+- No moderation, role-based staff workflow or retention scheduler is included.
+- Guest signup links are bearer capabilities for references only. They do not automatically expire; hosts can close signup, and reopening invalidates the previous event link. Share them only with invited guests. Guests ask the host to remove references or withdraw permission.
+- Approved originals can be downloaded individually; CSV and filename copy support existing delivery tools. Private guest galleries use seven-day bearer links and show only approved photos. ZIP bundles, automated delivery emails and payments are not implemented.
 - Large events still need durable background processing, thumbnail generation and paginated library queries. Client progress and retries do not remove server timeout risks.
 - Correctional surveillance, public-space tracking, inmate tracking, and other law-enforcement identification workflows are explicitly non-target use cases for this project.
 - Reference images are managed at the person level in the current UI rather than as individually editable reference assets.

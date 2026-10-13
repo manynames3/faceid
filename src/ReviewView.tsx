@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, Expand } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DecisionButtons, Inspector } from "./Inspector";
+import { MatchedPhoto } from "./MatchedPhoto";
 import { formatScore } from "./format";
 import { isUndecided, type ReviewEntry } from "./library";
 import type { DecisionStatus } from "./types";
@@ -97,7 +98,7 @@ export function ReviewView({
           <h1 ref={headingRef} tabIndex={-1}>
             Review matches
           </h1>
-          <p className="view-subtitle">Only approved matches enter the delivery list.</p>
+          <p className="view-subtitle">Is this the same person? You're the final check.</p>
         </div>
         <div aria-label="Filter by decision" className="segmented" role="group">
           {(Object.keys(filterLabels) as Filter[]).map((key) => (
@@ -145,7 +146,7 @@ export function ReviewView({
           action={
             filter === "pending" && counts.approved > 0 ? (
               <button className="button button-primary" onClick={onGoToDeliver} type="button">
-                Open approved photo list
+                Open guest galleries
               </button>
             ) : undefined
           }
@@ -153,7 +154,7 @@ export function ReviewView({
         >
           {filter === "pending"
             ? counts.approved > 0
-              ? "Every suggested match has a decision. Your approved photo list is ready, and earlier decisions can still be changed."
+              ? "Every suggested match has a decision. Your guest galleries are ready to share, and earlier decisions can still be changed."
               : "Every suggested match was rejected. Nothing will be included in delivery. You can still change earlier decisions."
             : "There are no " + filter + " matches yet."}
         </EmptyState>
@@ -196,61 +197,61 @@ export function ReviewView({
             aria-label={"Review " + current.match.personName + " in " + current.photo.name}
             className="review-comparison"
           >
+            <div className="review-navigation">
+              <div className="mobile-review-picker field">
+                <label className="visually-hidden" htmlFor="review-selection">
+                  Selected match
+                </label>
+                <select
+                  id="review-selection"
+                  onChange={(event) => select(Number(event.target.value))}
+                  value={index}
+                >
+                  {filtered.map((entry, itemIndex) => (
+                    <option key={entry.key} value={itemIndex}>
+                      {itemIndex + 1}. {entry.match.personName} · {entry.photo.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <span className="review-position" aria-live="polite">
+                {index + 1} of {filtered.length}
+              </span>
+              <div className="actions">
+                <button
+                  aria-label="Previous match"
+                  className="button button-icon"
+                  disabled={index === 0}
+                  onClick={() => step(-1)}
+                  ref={previousRef}
+                  title="Previous match"
+                  type="button"
+                >
+                  <ChevronLeft aria-hidden="true" size={19} />
+                </button>
+                <button
+                  aria-label="Next match"
+                  className="button button-icon"
+                  disabled={index >= filtered.length - 1}
+                  onClick={() => step(1)}
+                  ref={nextRef}
+                  title="Next match"
+                  type="button"
+                >
+                  <ChevronRight aria-hidden="true" size={19} />
+                </button>
+              </div>
+            </div>
             <div className="comparison-images">
               <figure className="comparison-event">
                 <figcaption>
                   <strong>Event photo</strong>
                   <span title={current.photo.name}>{current.photo.name}</span>
                 </figcaption>
-                <div className="review-navigation">
-                  <div className="mobile-review-picker field">
-                    <label className="visually-hidden" htmlFor="review-selection">
-                      Selected match
-                    </label>
-                    <select
-                      id="review-selection"
-                      onChange={(event) => select(Number(event.target.value))}
-                      value={index}
-                    >
-                      {filtered.map((entry, itemIndex) => (
-                        <option key={entry.key} value={itemIndex}>
-                          {itemIndex + 1}. {entry.match.personName} · {entry.photo.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <span className="review-position" aria-live="polite">
-                    {index + 1} of {filtered.length}
-                  </span>
-                  <div className="actions">
-                    <button
-                      aria-label="Previous match"
-                      className="button button-icon"
-                      disabled={index === 0}
-                      onClick={() => step(-1)}
-                      ref={previousRef}
-                      title="Previous match"
-                      type="button"
-                    >
-                      <ChevronLeft aria-hidden="true" size={19} />
-                    </button>
-                    <button
-                      aria-label="Next match"
-                      className="button button-icon"
-                      disabled={index >= filtered.length - 1}
-                      onClick={() => step(1)}
-                      ref={nextRef}
-                      title="Next match"
-                      type="button"
-                    >
-                      <ChevronRight aria-hidden="true" size={19} />
-                    </button>
-                  </div>
-                </div>
                 <div className="comparison-photo">
-                  <PhotoImage
+                  <MatchedPhoto
                     alt={"Event photo " + current.photo.name + ", shown without cropping"}
-                    eager
+                    faceBox={current.match.faceBox}
                     onReload={onRefresh}
                     src={current.photo.previewUrl}
                   />
@@ -285,13 +286,13 @@ export function ReviewView({
                   </div>
                 </figure>
                 <div className="comparison-result">
-                  <p>
-                    {isDemo ? "Sample score" : "Matching score"}{" "}
-                    <strong>{formatScore(current.match.confidence)}</strong>
-                  </p>
                   <StatusBadge status={current.match.status} />
+                  <p className="match-score">
+                    {current.match.source === "manual" ? "Added by you" : isDemo ? "Sample score" : "Matching score"}{" "}
+                    {current.match.source !== "manual" && <strong>{formatScore(current.match.confidence)}</strong>}
+                  </p>
                   <p className="hint">
-                    {isDemo
+                    {current.match.source === "manual" ? "You confirmed this guest is in the photo." : isDemo
                       ? "Simulated result. No face analysis has run."
                       : "A suggested match, not proof of identity."}
                   </p>

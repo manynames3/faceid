@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type Route = "landing" | "demo" | "app" | "guest" | "not-found";
+export type Route = "landing" | "demo" | "app" | "guest" | "guest-preview" | "gallery" | "gallery-preview" | "not-found";
 
 const navigateEvent = "faceid:navigate";
 
@@ -16,6 +16,12 @@ export function routeForPath(pathname: string): Route {
       return "app";
     case "/guest":
       return "guest";
+    case "/demo/guest":
+      return "guest-preview";
+    case "/gallery":
+      return "gallery";
+    case "/demo/gallery":
+      return "gallery-preview";
     default:
       return "not-found";
   }

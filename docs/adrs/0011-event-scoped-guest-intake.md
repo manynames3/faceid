@@ -14,4 +14,6 @@ Preserve the existing event-scoped HMAC link format and server signing secret. O
 
 ## Consequences
 
+The initial link-lifecycle limitations below are superseded by [ADR 0012](0012-invitation-controls-and-guest-recovery.md), which adds per-event closure and rotation while preserving version-zero links until hosts close/reopen signup.
+
 Guest signup stays simple, and old links keep working. Holding a link is not proof of identity: guests self-report names and permission, and hosts review matches. Links currently have no automatic expiry or individual revocation, so they must be shared only with invited guests. Rotating the signing secret invalidates all links. Guest-side withdrawal and secure finished-gallery delivery remain separate work; this portal does not expose event photos. Terraform state contains the signing secret and must not be committed.

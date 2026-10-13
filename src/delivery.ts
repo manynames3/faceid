@@ -8,7 +8,8 @@ export type ManifestRow = {
   guestName: string;
   photoId: string;
   reviewedAt: string;
-  similarity: number;
+  similarity?: number;
+  source?: string;
 };
 
 export type GuestManifest = {
@@ -63,6 +64,7 @@ export function buildManifest({
         photoId: photo.id,
         reviewedAt: match.reviewedAt ?? "",
         similarity: match.confidence,
+        source: match.source ?? "face_match",
       });
     }
   }
@@ -126,6 +128,7 @@ export const csvHeader = [
   "filename",
   "similarity",
   "reviewed_at",
+  "match_source",
 ];
 
 /** Signed image URLs are deliberately never exported: they are expiring bearer links. */
@@ -139,8 +142,9 @@ export function manifestToCsv(rows: ManifestRow[]): string {
         row.guestName,
         row.photoId,
         row.filename,
-        Number.isFinite(row.similarity) ? row.similarity.toFixed(1) : "",
+        row.similarity !== undefined && Number.isFinite(row.similarity) ? row.similarity.toFixed(1) : "",
         row.reviewedAt,
+        row.source ?? "face_match",
       ]
         .map(escapeCsvCell)
         .join(","),

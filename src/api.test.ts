@@ -120,6 +120,19 @@ describe("delete requests", () => {
 });
 
 describe("events and review updates", () => {
+  it("authenticates event settings and original-photo download requests", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+    const settings = { name: "Dinner", hostName: "Studio", contactEmail: "hello@example.com", signupOpen: false };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ event: { id: "event 1", ...settings } })).mockResolvedValueOnce(jsonResponse({ url: "https://s3.example.test/original", filename: "event.jpg" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { updateEvent, fetchPhotoDownload } = await import("./api");
+    expect(await updateEvent("event 1", settings, authSession)).toMatchObject(settings);
+    expect(await fetchPhotoDownload("photo/1", authSession)).toMatchObject({ filename: "event.jpg" });
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.test/events/event%201");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PATCH", headers: { Authorization: "Bearer id-token" } });
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.example.test/photos/photo%2F1/download");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer id-token");
+  });
   it("loads and creates authenticated event workspaces", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
 
@@ -357,6 +370,61 @@ describe("error mapping", () => {
 });
 
 describe("guest intake", () => {
+  it("keeps gallery reads and downloads public-capability-only, and owner link controls authenticated", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ photos: [], guestName: "Guest" }))
+      .mockResolvedValueOnce(jsonResponse({ url: "signed", filename: "photo.jpg" }))
+      .mockResolvedValueOnce(jsonResponse({ galleryUrl: "private", person: { id: "person 1" } }))
+      .mockResolvedValueOnce(jsonResponse({ person: { id: "person 1", galleryEnabled: false } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchGuestGallery, fetchGalleryDownload, createGalleryLink, disableGalleryLink } = await import("./api");
+    await fetchGuestGallery("person 1", "private-token");
+    await fetchGalleryDownload("person 1", "private-token", "photo/1");
+    await createGalleryLink("person 1", authSession, "photo/1");
+    await disableGalleryLink("person 1", authSession);
+    for (const index of [0, 1]) expect(fetchMock.mock.calls[index][1].headers).toBeUndefined();
+    expect(fetchMock.mock.calls[1][0]).toContain("/guest-gallery/photos/photo%2F1/download?");
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: "POST", headers: { Authorization: "Bearer id-token" } });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ photoId: "photo/1" });
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: "DELETE", headers: { Authorization: "Bearer id-token" } });
+  });
+  it("sends the same rematch request ID on retry and authenticates manual assignment", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ match: { source: "manual", status: "approved" } }))
+      .mockResolvedValueOnce(new Response("{}", { status: 504 }))
+      .mockResolvedValueOnce(jsonResponse({ match: null, outcome: "no_new_match" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { assignPhotoGuest, rematchPhotoGuest } = await import("./api");
+    await assignPhotoGuest("event-1", "photo 1", "person-1", authSession);
+    await expect(rematchPhotoGuest("event-1", "photo 1", "person-1", "stable-request", authSession)).rejects.toMatchObject({ uncertain: true });
+    await rematchPhotoGuest("event-1", "photo 1", "person-1", "stable-request", authSession);
+    expect(fetchMock.mock.calls[1][1].body).toBe(fetchMock.mock.calls[2][1].body);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ requestId: "stable-request", eventId: "event-1", personId: "person-1" });
+    for (const call of fetchMock.mock.calls) expect(call[1].headers.Authorization).toBe("Bearer id-token");
+  });
+  it("checks guest receipts without an owner token or another processing request", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "saved", name: "Guest", referenceCount: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchGuestSubmission } = await import("./api");
+    expect(await fetchGuestSubmission("event-1", "invitation-token", ["upload-1"])).toMatchObject({ status: "saved", referenceCount: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.test/guest-intake/status");
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ eventId: "event-1", token: "invitation-token", uploadIds: ["upload-1"] });
+  });
+  it("records an uploaded guest receipt before an uncertain processing response", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
+    const onReceipt = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ uploads: [{ name: "ref.jpg", uploadId: "guest-upload", key: "users/owner/references/ref.jpg", url: "https://s3.example.test/ref", headers: {} }] }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockImplementationOnce(() => { expect(onReceipt).toHaveBeenCalledWith(["guest-upload"]); return Promise.resolve(new Response("{}", { status: 504 })); });
+    vi.stubGlobal("fetch", fetchMock);
+    const { submitUpload } = await import("./api");
+    await expect(submitUpload({ eventId: "event-1", intakeToken: "invite", guestName: "Guest", files: [new File(["x"], "ref.jpg", { type: "image/jpeg" })], mode: "references", people: [], consentConfirmed: true, onReceipt })).rejects.toMatchObject({ uncertain: true });
+    expect(onReceipt).toHaveBeenCalledTimes(1);
+  });
   it("requests owner links with auth and guest metadata without it", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test");
     const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({eventId: "event-1", eventName: "Dinner", intakeUrl: "https://site.example.test/guest"}));

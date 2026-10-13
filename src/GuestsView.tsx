@@ -8,16 +8,17 @@ import {
   ShieldCheck,
   Trash2,
   UsersRound,
-  X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { formatDate, pluralize } from "./format";
 import { errorMessage } from "./errors";
+import { Link } from "./Link";
+import { ReferenceSelection } from "./ReferencePhotos";
 import type { IntakeLink } from "./api";
 import type { GuestStats } from "./library";
 import type { AddGuestInput } from "./useWorkspace";
-import type { Person } from "./types";
-import { ACCEPT_ATTRIBUTE, formatBytes, MAX_REFERENCE_FILES, validateImageFiles } from "./uploads";
+import type { EventWorkspace, Person } from "./types";
+import { ACCEPT_ATTRIBUTE, MAX_REFERENCE_FILES, validateImageFiles } from "./uploads";
 import type { RejectedFile } from "./uploads";
 import { ConfirmDialog, Dialog, EmptyState, PhotoImage, Spinner } from "./ui";
 
@@ -32,6 +33,11 @@ function consentText(person: Person) {
 }
 
 export function GuestsView({
+  event,
+  isDemo,
+  onEditEvent,
+  onFindGuest,
+  hasPhotos,
   isBusy,
   onAddGuest,
   onDeleteGuest,
@@ -41,6 +47,11 @@ export function GuestsView({
   stats,
   submissionError,
 }: {
+  event?: EventWorkspace;
+  isDemo: boolean;
+  onEditEvent: () => void;
+  onFindGuest: (personId: string) => void;
+  hasPhotos: boolean;
   isBusy: boolean;
   onAddGuest: (input: AddGuestInput) => Promise<boolean>;
   onDeleteGuest: (person: Person) => void;
@@ -56,6 +67,7 @@ export function GuestsView({
   const [inviting, setInviting] = useState(false);
   const deleteStats = pendingDelete ? (stats.get(pendingDelete.id) ?? noStats) : noStats;
   const viewedPerson = people.find((person) => person.id === viewing?.id);
+  const readyToInvite = event?.signupOpen !== false && Boolean(event?.hostName && event?.contactEmail);
 
   return (
     <div className="view guests-view">
@@ -81,22 +93,23 @@ export function GuestsView({
             <button
               className="button button-primary"
               disabled={isBusy}
-              onClick={() => setInviting(true)}
+              onClick={() => readyToInvite ? setInviting(true) : onEditEvent()}
               type="button"
             >
-              <Link2 aria-hidden="true" size={18} /> Invite guests
+              <Link2 aria-hidden="true" size={18} /> {event?.signupOpen === false ? "Reopen signup" : "Invite guests"}
             </button>
           )}
         </div>
       </div>
 
+      {isDemo && <div className="guest-preview-link"><span>See the other side of the invitation.</span><Link href="/demo/guest">Preview guest signup <Link2 aria-hidden="true" size={15} /></Link></div>}
+      {!isDemo && !readyToInvite && <div className="setup-note"><p>{event?.signupOpen === false ? "Guest signup is closed. Your existing guest list is unchanged." : "Add your host name and contact email before inviting guests."}</p><button className="text-button" disabled={isBusy} onClick={onEditEvent} type="button">Event details</button></div>}
+
       {people.length === 0 ? (
         <div className="guest-empty">
           <UsersRound aria-hidden="true" size={32} />
-          <EmptyState title="Your guest list starts here">
-            Add a name, a clear reference photo and their permission.
-            {onGetIntakeLink && " Guests can also sign up through your event link."}
-          </EmptyState>
+          <EmptyState title="Let's bring your guests in.">Invite guests to send a reference photo and permission, or add them yourself.</EmptyState>
+          <ol className="event-start-steps"><li><span>1</span> Invite your guests</li><li><span>2</span> Wait for their references</li><li><span>3</span> Upload your event photos</li></ol>
         </div>
       ) : (
         <ul aria-label="Event guests" className="guest-grid">
@@ -131,7 +144,7 @@ export function GuestsView({
                   </div>
                   <p
                     className={
-                      person.consentStatus === "captured"
+                      person.consentStatus === "captured" && !person.deletionPending
                         ? "permission permission-recorded"
                         : "permission permission-missing"
                     }
@@ -141,7 +154,7 @@ export function GuestsView({
                     ) : (
                       <ShieldCheck aria-hidden="true" size={15} />
                     )}
-                    {person.consentStatus === "captured"
+                    {person.deletionPending ? "Removal incomplete. Retry from the menu." : person.consentStatus === "captured"
                       ? "Permission recorded"
                       : "Permission missing"}
                   </p>
@@ -160,10 +173,11 @@ export function GuestsView({
                     </div>
                   </dl>
                   <div className="guest-card-footer">
+                    <button className="text-button" disabled={isBusy || !hasPhotos || person.deletionPending || person.consentStatus !== "captured"} onClick={() => onFindGuest(person.id)} type="button">Find in photos</button>
                     {person.referenceCount < MAX_REFERENCE_FILES ? (
                       <button
                         className="text-button"
-                        disabled={isBusy}
+                        disabled={isBusy || person.deletionPending}
                         onClick={() => setFormTarget(person)}
                         type="button"
                       >
@@ -537,42 +551,6 @@ function GuestForm({
   );
 }
 
-function ReferenceSelection({
-  file,
-  onRemove,
-  disabled,
-}: {
-  file: File;
-  onRemove: () => void;
-  disabled: boolean;
-}) {
-  const imageRef = useRef<HTMLImageElement>(null);
-  useEffect(() => {
-    const url = URL.createObjectURL(file);
-    if (imageRef.current) imageRef.current.src = url;
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
-  return (
-    <li>
-      <img alt={"Selected reference " + file.name} ref={imageRef} />
-      <div>
-        <strong className="truncate">{file.name}</strong>
-        <span className="meta">{formatBytes(file.size)}</span>
-      </div>
-      <button
-        aria-label={"Remove " + file.name}
-        className="button button-icon button-ghost"
-        disabled={disabled}
-        onClick={onRemove}
-        title="Remove photo"
-        type="button"
-      >
-        <X aria-hidden="true" size={17} />
-      </button>
-    </li>
-  );
-}
-
 function InviteDialog({
   onClose,
   onGetLink,
@@ -650,6 +628,7 @@ function InviteDialog({
             <button className="button button-primary" onClick={() => void copy()} type="button">
               <ClipboardCopy aria-hidden="true" size={18} /> Copy invitation link
             </button>
+            <a className="text-link" href={link} rel="noreferrer" target="_blank">Open guest invitation</a>
           </>
         )}
         <p className="hint" role="status">
@@ -658,8 +637,7 @@ function InviteDialog({
         <p className="invite-privacy">
           <ShieldCheck aria-hidden="true" size={17} />
           <span>
-            This link accepts signups only. It doesn't give access to photos or expire
-            automatically. Share it only with invited guests.
+            This link accepts reference photos only, not access to event photos. Share it with invited guests. You can close signup in Event details; reopening creates a new link.
           </span>
         </p>
       </div>

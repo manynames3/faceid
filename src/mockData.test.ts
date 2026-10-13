@@ -9,9 +9,14 @@ describe("sample photo labels", () => {
     expect(photos).toHaveLength(portraits.length);
     for (const portrait of portraits) {
       expect(portrait.src).toBe(`/images/${portrait.filename}`);
-      expect(photos.find((photo) => photo.previewUrl === portrait.src)?.name).toBe(
-        portrait.filename,
-      );
     }
+    for (const photo of photos) expect(photo.previewUrl).toBe(`/images/${photo.name}`);
+  });
+  it("shows a different event photo and reference for the group-photo example", () => {
+    const { photos, people } = createSampleData();
+    const noah = people.find(person => person.name === "Noah Kim")!;
+    const eventPhoto = photos.find(photo => photo.matches.some(match => match.personId === noah.id))!;
+    expect(eventPhoto.previewUrl).not.toBe(noah.referencePreviewUrl);
+    expect(eventPhoto.matches[0].faceBox).toBeDefined();
   });
 });

@@ -1,6 +1,7 @@
-import { AlertTriangle, CheckCircle2, CircleDashed, Clock, ImagePlus, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Clock, ImagePlus, Trash2, UserRoundPlus, Search } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { Inspector } from "./Inspector";
+import { AssignGuest } from "./AssignGuest";
 import { formatScore, pluralize } from "./format";
 import { buildInspectorItems, type ReviewEntry } from "./library";
 import type { DecisionStatus, Person, PhotoAsset } from "./types";
@@ -48,6 +49,9 @@ export function PhotosView({
   onRetry,
   onReview,
   onUpload,
+  onAssignGuest,
+  onFindGuest,
+  submissionError,
   people,
   photos,
   queue,
@@ -64,6 +68,9 @@ export function PhotosView({
   onRetry: () => void;
   onReview: (entry: ReviewEntry, status: DecisionStatus) => void;
   onUpload: (files: File[]) => void;
+  onAssignGuest: (photoId: string, personId: string) => Promise<boolean>;
+  onFindGuest: () => void;
+  submissionError?: string;
   people: Person[];
   photos: PhotoAsset[];
   queue: QueueItem[];
@@ -77,6 +84,7 @@ export function PhotosView({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [inspectorKey, setInspectorKey] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PhotoAsset | null>(null);
+  const [assigning, setAssigning] = useState<PhotoAsset | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const closeInspector = useCallback(() => setInspectorKey(null), []);
 
@@ -272,6 +280,7 @@ export function PhotosView({
       )}
 
       <section aria-labelledby="gallery-title" className="section">
+        {photos.length > 0 && <div className="photo-tools"><button className="button" disabled={isBusy || !hasGuests} onClick={onFindGuest} type="button"><Search aria-hidden="true" size={17} /> Find a guest in existing photos</button></div>}
         <div className="section-head">
           <h2 className="visually-hidden" id="gallery-title">
             Photo library
@@ -347,6 +356,7 @@ export function PhotosView({
                         <h3 className="truncate" title={photo.name}>
                           {photo.name}
                         </h3>
+                        <button aria-label={`Add a guest to ${photo.name}`} className="button button-icon" disabled={isBusy || !hasGuests} onClick={() => setAssigning(photo)} title="Add a missed guest" type="button"><UserRoundPlus aria-hidden="true" size={17} /></button>
                         <button
                           aria-label={`Delete ${photo.name}`}
                           className="button button-icon button-quiet-danger"
@@ -366,7 +376,7 @@ export function PhotosView({
                           {photo.matches.map((match) => (
                             <li key={match.personId}>
                               <span className="truncate">{match.personName}</span>
-                              <span className="score">{formatScore(match.confidence)}</span>
+                              <span className="score">{match.source === "manual" ? "Added by you" : formatScore(match.confidence)}</span>
                               <StatusBadge status={match.status} />
                             </li>
                           ))}
@@ -421,6 +431,7 @@ export function PhotosView({
           </p>
         </ConfirmDialog>
       )}
+      {assigning && <AssignGuest busy={isBusy} error={submissionError} onAssign={onAssignGuest} onClose={() => setAssigning(null)} people={people} photo={assigning} />}
     </div>
   );
 }

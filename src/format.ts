@@ -8,8 +8,8 @@ export function formatDate(value?: string) {
     : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-export function formatScore(confidence: number) {
-  return `${confidence.toFixed(1)}%`;
+export function formatScore(confidence?: number) {
+  return confidence === undefined ? "Not scored" : `${confidence.toFixed(1)}%`;
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`) {

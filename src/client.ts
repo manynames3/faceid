@@ -7,6 +7,12 @@ import {
   fetchIntakeLink,
   submitUpload,
   updateMatchStatus,
+  updateEvent,
+  fetchPhotoDownload,
+  assignPhotoGuest,
+  rematchPhotoGuest,
+  createGalleryLink,
+  disableGalleryLink,
 } from "./api";
 import type { IntakeLink } from "./api";
 import type { AuthSession } from "./auth";
@@ -14,11 +20,14 @@ import { ApiError } from "./errors";
 import type {
   DecisionStatus,
   EventWorkspace,
+  EventSettings,
   LibraryResult,
   Person,
   PhotoMatch,
   UploadMode,
   UploadResult,
+  GalleryLink,
+  RematchResult,
 } from "./types";
 
 export type UploadRequest = {
@@ -37,7 +46,13 @@ export type UploadRequest = {
  * sample workspace can never reach the network.
  */
 export type WorkspaceClient = {
+  assignGuest(eventId: string, photoId: string, personId: string): Promise<PhotoMatch>;
+  rematchGuest(eventId: string, photoId: string, personId: string, requestId: string): Promise<RematchResult>;
+  createGalleryLink?: (personId: string, photoId: string) => Promise<GalleryLink>;
+  disableGalleryLink?: (personId: string) => Promise<Person>;
   createEvent(name: string): Promise<EventWorkspace>;
+  updateEvent(eventId: string, settings: EventSettings): Promise<EventWorkspace>;
+  downloadPhoto(eventId: string, photoId: string): Promise<{ url: string; filename: string }>;
   deletePerson(eventId: string, personId: string): Promise<void>;
   deletePhoto(eventId: string, photoId: string): Promise<void>;
   fetchEvents(signal?: AbortSignal): Promise<EventWorkspace[]>;
@@ -58,7 +73,13 @@ export type WorkspaceClient = {
 export function createLiveClient(session: AuthSession): WorkspaceClient {
   return {
     mode: "live",
+    assignGuest: (eventId, photoId, personId) => assignPhotoGuest(eventId, photoId, personId, session),
+    rematchGuest: (eventId, photoId, personId, requestId) => rematchPhotoGuest(eventId, photoId, personId, requestId, session),
+    createGalleryLink: (personId, photoId) => createGalleryLink(personId, session, photoId),
+    disableGalleryLink: (personId) => disableGalleryLink(personId, session),
     createEvent: (name) => createEvent(name, session),
+    updateEvent: (eventId, settings) => updateEvent(eventId, settings, session),
+    downloadPhoto: (_eventId, photoId) => fetchPhotoDownload(photoId, session),
     deletePerson: (_eventId, personId) => deletePerson(personId, session),
     deletePhoto: (_eventId, photoId) => deletePhoto(photoId, session),
     fetchEvents: (signal) => fetchEvents(session, signal),

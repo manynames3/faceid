@@ -8,6 +8,7 @@ import {
 } from "./AuthScreens";
 import { Landing } from "./Landing";
 import { GuestPage } from "./GuestPage";
+import { GuestGalleryPage } from "./GuestGallery";
 import { routeForPath, useLocation } from "./router";
 import { useAuth } from "./useAuth";
 import { Workspace } from "./Workspace";
@@ -44,6 +45,10 @@ function App() {
   if (route === "guest") {
     return <GuestPage key={search} search={search} />;
   }
+
+  if (route === "guest-preview") return <GuestPage key="preview" preview search="" />;
+  if (route === "gallery") return <GuestGalleryPage key={search} search={search} />;
+  if (route === "gallery-preview") return <GuestGalleryPage preview search="" />;
 
   if (route === "app") {
     if (availability !== "ready") {

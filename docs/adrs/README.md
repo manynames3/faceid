@@ -13,3 +13,6 @@ This directory captures the main architecture decisions for FaceID.
 - [ADR 0009: Add Owner-Scoped Delete Workflows](0009-owner-scoped-delete-workflows.md)
 - [ADR 0010: Add Event Workspaces, Consent Metadata, And Human Review Decisions](0010-event-workspaces-consent-and-review.md)
 - [ADR 0011: Separate Guest Intake From The Owner Library](0011-event-scoped-guest-intake.md)
+- [ADR 0012: Add Event Invitation Controls And Guest Submission Recovery](0012-invitation-controls-and-guest-recovery.md)
+- [ADR 0013: Deliver Approved Photos Through Private Guest Galleries](0013-private-approved-guest-galleries.md)
+- [ADR 0014: Support Manual Corrections And Bounded Rematching](0014-manual-corrections-and-bounded-rematching.md)

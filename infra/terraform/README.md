@@ -33,6 +33,16 @@ For a new stack, Terraform generates the guest signing secret and stores it in t
 
 This release checkout has no original production Terraform state. Do not apply or destroy from an empty state against the existing deployment: recover the original state or import the live resources first. Code-only releases can update the existing Lambda ZIP without changing its environment, preserving the signing secret and stored photos.
 
+The invitation-controls release also needs three API Gateway routes, not just a Lambda ZIP: JWT-protected `PATCH /events/{event_id}` and `GET /photos/{photo_id}/download`, plus public `POST /guest-intake/status` (capability-checked inside Lambda). Deploy backend code and these routes before the frontend. Preserve the existing signing secret, integrations, authorizer and throttles. No new service, table or paid subscription is introduced. Check an existing invitation, close/reopen behavior and an owner-only download after release. Do not claim local mock-API checks verify the deployed AWS path.
+
+The delivery/correction release adds six more routes in `main.tf`:
+
+- JWT-protected `POST /photos/{photo_id}/guests` and `POST /photos/{photo_id}/rematch`.
+- JWT-protected `POST /people/{person_id}/gallery-link` and `DELETE /people/{person_id}/gallery-link`.
+- Public `GET /guest-gallery` and `GET /guest-gallery/photos/{photo_id}/download`, each capability-checked inside Lambda.
+
+Publish Lambda and routes before the frontend. Existing table indexes and Put/Update IAM actions support the match transactions; no new service or table is needed. Reload open host tabs before using manual assignments: old frontend builds assumed every match had a numeric similarity. Smoke-test approval, guest-link creation, download, rejection and revocation after release. Public gallery images use five-minute signed URLs; already-issued URLs can outlive revocation for that interval.
+
 ```bash
 cd infra/terraform
 terraform init

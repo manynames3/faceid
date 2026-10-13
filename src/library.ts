@@ -54,13 +54,13 @@ export function dedupeMatches(matches: PhotoMatch[]): PhotoMatch[] {
     if (
       !existing ||
       reviewTime(match) > reviewTime(existing) ||
-      (reviewTime(match) === reviewTime(existing) && match.confidence > existing.confidence)
+      (reviewTime(match) === reviewTime(existing) && (match.confidence ?? 0) > (existing.confidence ?? 0))
     ) {
       byPerson.set(match.personId, match);
     }
   }
 
-  return Array.from(byPerson.values()).sort((a, b) => b.confidence - a.confidence);
+  return Array.from(byPerson.values()).sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
 }
 
 export function normalizePhoto(photo: PhotoAsset): PhotoAsset {
@@ -257,11 +257,7 @@ export function libraryReducer(state: LibraryState, action: LibraryAction): Libr
           photo.id === action.photoId
             ? {
                 ...photo,
-                matches: photo.matches.map((match) =>
-                  match.personId === action.match.personId
-                    ? { ...match, ...action.match }
-                    : match,
-                ),
+                matches: dedupeMatches([...photo.matches.filter(match => match.personId !== action.match.personId), action.match]),
               }
             : photo,
         ),

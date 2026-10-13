@@ -117,6 +117,9 @@ export function apiErrorFromStatus(
       status,
     });
   }
+  if (status === 409) {
+    return new ApiError({ kind: "unknown", message: detail ?? "This request is still running. Check its result before trying again.", stage, status });
+  }
   return new ApiError({
     kind: "unknown",
     message: `The request wasn't accepted (status ${status}).`,
